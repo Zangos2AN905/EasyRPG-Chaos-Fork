@@ -648,6 +648,7 @@ void Window_Settings::RefreshChaos() {
 		GetFrame().options.push_back(std::move(opt));
 	}
 
+	/*
 	// AI Rewriter: toggle Snapcube-style dialogue rewriting
 	{
 		Option opt;
@@ -675,6 +676,7 @@ void Window_Settings::RefreshChaos() {
 		};
 		GetFrame().options.push_back(std::move(opt));
 	}
+	
 	// Manage Characters submenu (only shown when not OFF)
 	if (Chaos::AICharacters::GetMode() != Chaos::AICharacters::Mode::Off) {
 		auto& chars = Chaos::AICharacters::GetAllCharacters();
@@ -695,7 +697,7 @@ void Window_Settings::RefreshChaos() {
 		GetFrame().options.push_back(std::move(opt));
 	}
 }
-
+*/
 void Window_Settings::RefreshInput() {
 	Game_ConfigInput& cfg = Input::GetInputSource()->GetConfig();
 

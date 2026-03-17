@@ -994,6 +994,15 @@ void MultiplayerState::DeclineBattleInvite() {
 }
 
 void MultiplayerState::ConsumeForcedBattle() {
+	// Don't force a dead/spectating player into battle
+	if (spectating) {
+		forced_battle = false;
+		return;
+	}
+
+	// Don't interrupt a running cutscene/event — defer until it finishes
+	if (Game_Map::GetInterpreter().IsRunning()) return;
+
 	forced_battle = false;
 
 	in_battle = true;
@@ -1330,6 +1339,16 @@ void MultiplayerState::HandleMapChangeForce(const uint8_t* data, size_t len) {
 
 void MultiplayerState::ConsumeForcedMapChange() {
 	if (!forced_map_change) return;
+
+	// When spectating, UpdateSpectator handles map following — skip forced teleport
+	if (spectating) {
+		forced_map_change = false;
+		return;
+	}
+
+	// Don't teleport while a cutscene/event is running — defer until it finishes
+	if (Game_Map::GetInterpreter().IsRunning()) return;
+
 	forced_map_change = false;
 
 	if (Main_Data::game_player && !Main_Data::game_player->IsPendingTeleport()) {
@@ -1422,6 +1441,12 @@ void MultiplayerState::DestroyRubberBandDrawable() {
 void MultiplayerState::UpdateRubberBand() {
 	if (!rubber_band) return;
 
+	// Don't show rubber band or pull when spectating (player is dead/hidden)
+	if (spectating) {
+		rubber_band->SetVisible(false);
+		return;
+	}
+
 	auto* hero = Main_Data::game_player.get();
 	if (!hero) {
 		rubber_band->SetVisible(false);
@@ -1470,6 +1495,7 @@ void MultiplayerState::UpdateRubberBand() {
 
 bool MultiplayerState::ShouldBlockMovement(int dir) const {
 	if (!active) return false;
+	if (spectating) return false;
 
 	auto& net = NetManager::Instance();
 	if (!net.IsConnected()) return false;
