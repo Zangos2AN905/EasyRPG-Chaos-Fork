@@ -1,0 +1,90 @@
+/*
+ * Chaos Fork: Multiplayer Lobby Scene
+ * Host or Join a multiplayer game.
+ */
+
+#ifndef EP_CHAOS_SCENE_MULTIPLAYER_LOBBY_H
+#define EP_CHAOS_SCENE_MULTIPLAYER_LOBBY_H
+
+#include "scene.h"
+#include "window_command.h"
+#include "window_help.h"
+#include "window_selectable.h"
+#include "chaos/relay_connection.h"
+#include <memory>
+#include <string>
+
+namespace Chaos {
+
+class Scene_MultiplayerLobby : public Scene {
+public:
+	Scene_MultiplayerLobby();
+
+	void Start() override;
+	void vUpdate() override;
+
+private:
+	enum class LobbyState {
+		NameEntry,       // Enter player name
+		HostOrJoin,      // Choose Host or Join
+		ModeSelect,      // Host: choose game mode
+		IpEntry,         // Join: enter IP address
+		RelayModeSelect, // Relay host: choose game mode
+		RelayWaiting,    // Relay: waiting for room code or join result
+		ServerBrowser,   // Browse online servers
+		Waiting,         // Connected, waiting to start / waiting for host
+	};
+
+	void CreateWindows();
+	void UpdateNameEntry();
+	void UpdateHostOrJoin();
+	void UpdateModeSelect();
+	void UpdateIpEntry();
+	void UpdateRelayModeSelect();
+	void UpdateRelayWaiting();
+	void UpdateServerBrowser();
+	void UpdateWaiting();
+
+	void StartHosting();
+	void StartJoining();
+	void StartRelayHosting();
+	void StartGame();
+	void ClientStartGame();
+	void RefreshPlayerList();
+	void RefreshServerList();
+
+	LobbyState state = LobbyState::NameEntry;
+
+	std::unique_ptr<Window_Help> help_window;
+	std::unique_ptr<Window_Command> hostjoin_window;
+	std::unique_ptr<Window_Command> mode_window;
+	std::unique_ptr<Window_Help> ip_window;
+	std::unique_ptr<Window_Help> status_window;
+	std::unique_ptr<Window_Help> playerlist_window;
+	std::unique_ptr<Window_Command> start_window;
+	std::unique_ptr<Window_Help> name_window;
+	std::unique_ptr<Window_Command> browser_window;
+	std::unique_ptr<Window_Help> browser_info_window;
+
+	std::string player_name;
+	int name_cursor = 0;
+	std::string ip_octets[4];
+	int ip_octet_idx = 0;
+	int ip_digit_idx = 0;
+	int connect_timer = 0;
+	bool connected = false;
+	bool relay_mode = false;
+
+	// Room code (used by server browser)
+	std::string room_code;
+
+	// Server browser
+	std::vector<std::string> browser_room_codes;
+	std::vector<std::string> browser_game_names;
+	bool browser_fetching = false;
+	int browser_refresh_timer = 0;
+};
+
+} // namespace Chaos
+
+#endif

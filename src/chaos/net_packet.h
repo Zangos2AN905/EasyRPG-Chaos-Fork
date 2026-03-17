@@ -1,0 +1,144 @@
+/*
+ * Chaos Fork: Network Packet Protocol
+ */
+
+#ifndef EP_CHAOS_NET_PACKET_H
+#define EP_CHAOS_NET_PACKET_H
+
+#include <cstdint>
+#include <cstring>
+#include <string>
+#include <vector>
+
+namespace Chaos {
+
+enum class PacketType : uint8_t {
+	// Connection
+	Join = 1,         // Client -> Server: request to join
+	JoinAccept,       // Server -> Client: join accepted with assigned peer_id
+	JoinReject,       // Server -> Client: join rejected (full, etc.)
+	PlayerJoined,     // Server -> All: a new player joined
+	PlayerLeft,       // Server -> All: a player left
+	Disconnect,       // Client -> Server: graceful disconnect
+
+	// Game state sync
+	PlayerPosition,   // Bidirectional: player position/direction update
+	SwitchSync,       // Server -> All: switch state changed
+	VariableSync,     // Server -> All: variable state changed
+	SwitchBulkSync,   // Server -> Client: bulk switch sync on join
+	VariableBulkSync, // Server -> Client: bulk variable sync on join
+
+	// Lobby
+	LobbyInfo,        // Server -> Client: game info (mode, player list)
+	GameStart,        // Server -> All: game is starting
+	ChatMessage,      // Bidirectional: chat message
+
+	// God Mode specific
+	GodCommand,       // God -> Server: control command (set level, modify event, etc.)
+
+	// Host map ready
+	HostMapReady,     // Server -> All: host entered a map (map_id, x, y)
+
+	// Battle sync
+	BattleStart,      // Initiator -> All: a battle started (troop_id, etc.)
+	BattleJoin,       // Player -> Server: request to join battle
+	BattleForce,      // Server -> All: force into battle (chaotix)
+	BattleAction,     // Player -> All: action chosen for actor (actor_id, action_type, target, skill/item)
+	BattleEnd,        // Server -> All: battle ended (result)
+
+	// Event sync
+	EventSync,        // Host -> All: event positions/directions on current map
+
+	// Battle turn sync
+	BattleTurnSync,   // Host -> All: execution phase starting (turn_seed)
+
+	// Battle escape voting
+	BattleEscapeVote, // Player -> All: escape vote (wants_escape bool)
+};
+
+// Simple packet buffer for serialization
+class PacketWriter {
+public:
+	PacketWriter(PacketType type) {
+		write(static_cast<uint8_t>(type));
+	}
+
+	void write(uint8_t v) { buf.push_back(v); }
+
+	void write(uint16_t v) {
+		buf.push_back(static_cast<uint8_t>(v & 0xFF));
+		buf.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+	}
+
+	void write(int32_t v) {
+		uint32_t u;
+		std::memcpy(&u, &v, 4);
+		buf.push_back(static_cast<uint8_t>(u & 0xFF));
+		buf.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+		buf.push_back(static_cast<uint8_t>((u >> 16) & 0xFF));
+		buf.push_back(static_cast<uint8_t>((u >> 24) & 0xFF));
+	}
+
+	void write(const std::string& s) {
+		write(static_cast<uint16_t>(s.size()));
+		buf.insert(buf.end(), s.begin(), s.end());
+	}
+
+	const uint8_t* data() const { return buf.data(); }
+	size_t size() const { return buf.size(); }
+
+private:
+	std::vector<uint8_t> buf;
+};
+
+class PacketReader {
+public:
+	PacketReader(const uint8_t* data, size_t len)
+		: buf(data), length(len), pos(0) {}
+
+	PacketType readType() { return static_cast<PacketType>(readU8()); }
+
+	uint8_t readU8() {
+		if (pos >= length) return 0;
+		return buf[pos++];
+	}
+
+	uint16_t readU16() {
+		if (pos + 2 > length) return 0;
+		uint16_t v = static_cast<uint16_t>(buf[pos]) |
+		             (static_cast<uint16_t>(buf[pos + 1]) << 8);
+		pos += 2;
+		return v;
+	}
+
+	int32_t readI32() {
+		if (pos + 4 > length) return 0;
+		uint32_t u = static_cast<uint32_t>(buf[pos]) |
+		             (static_cast<uint32_t>(buf[pos + 1]) << 8) |
+		             (static_cast<uint32_t>(buf[pos + 2]) << 16) |
+		             (static_cast<uint32_t>(buf[pos + 3]) << 24);
+		pos += 4;
+		int32_t v;
+		std::memcpy(&v, &u, 4);
+		return v;
+	}
+
+	std::string readString() {
+		uint16_t len = readU16();
+		if (pos + len > length) return "";
+		std::string s(reinterpret_cast<const char*>(buf + pos), len);
+		pos += len;
+		return s;
+	}
+
+	bool hasData() const { return pos < length; }
+
+private:
+	const uint8_t* buf;
+	size_t length;
+	size_t pos;
+};
+
+} // namespace Chaos
+
+#endif
