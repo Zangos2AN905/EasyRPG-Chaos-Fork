@@ -507,6 +507,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/game_multiplayer.h
 	src/chaos/multiplayer_state.cpp
 	src/chaos/multiplayer_state.h
+	src/chaos/drawable_rubber_band.cpp
+	src/chaos/drawable_rubber_band.h
 	src/chaos/scene_multiplayer_menu.cpp
 	src/chaos/scene_multiplayer_menu.h
 	src/chaos/scene_multiplayer_lobby.cpp
@@ -1031,6 +1033,11 @@ else()
 		DEFINITION HAVE_NLOHMANN_JSON
 		TARGET nlohmann_json::nlohmann_json
 		ONLY_CONFIG)
+endif()
+
+# Remove natvis from nlohmann_json target to avoid LNK1181 on MSVC
+if(TARGET nlohmann_json::nlohmann_json AND MSVC)
+	set_target_properties(nlohmann_json::nlohmann_json PROPERTIES INTERFACE_SOURCES "")
 endif()
 
 # Configure Audio backends

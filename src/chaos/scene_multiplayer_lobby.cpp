@@ -6,6 +6,7 @@
 #include "chaos/net_manager.h"
 #include "chaos/multiplayer_mode.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/discord_integration.h"
 #include "input.h"
 #include "player.h"
 #include "scene.h"
@@ -38,6 +39,17 @@ Scene_MultiplayerLobby::Scene_MultiplayerLobby() {
 
 void Scene_MultiplayerLobby::Start() {
 	player_name = "Player";
+
+	// If Discord RPC is enabled and we have a username, offer it as default
+	if (DiscordIntegration::IsEnabled() && DiscordIntegration::HasDiscordUser()) {
+		std::string discord_name = DiscordIntegration::GetDiscordUsername();
+		if (!discord_name.empty() && discord_name.size() <= static_cast<size_t>(MAX_NAME_LEN)) {
+			player_name = discord_name;
+		} else if (!discord_name.empty()) {
+			player_name = discord_name.substr(0, MAX_NAME_LEN);
+		}
+	}
+
 	// Pad name to MAX_NAME_LEN with spaces for editing
 	player_name.resize(MAX_NAME_LEN, ' ');
 	name_cursor = 0;
@@ -51,11 +63,55 @@ void Scene_MultiplayerLobby::Start() {
 
 	CreateWindows();
 	Game_Clock::ResetFrame(Game_Clock::now());
+
+	// Set up Discord join callback so users can join via Discord
+	DiscordIntegration::SetJoinCallback([this](const std::string& room_code) {
+		// Trim the player name for use
+		std::string trimmed = player_name;
+		size_t end = trimmed.find_last_not_of(' ');
+		if (end != std::string::npos) {
+			trimmed = trimmed.substr(0, end + 1);
+		} else {
+			trimmed = "Player";
+		}
+
+		Output::Debug("Discord: Joining room {} via Discord invite", room_code);
+		auto& net = NetManager::Instance();
+		if (net.IsConnected()) {
+			Output::Debug("Discord: Already connected, ignoring join request");
+			return;
+		}
+
+		if (!net.JoinViaRelay(RELAY_HOST, RELAY_PORT, room_code, trimmed)) {
+			Output::Debug("Discord: Failed to join room via Discord invite");
+			return;
+		}
+
+		// Transition to relay waiting state
+		state = LobbyState::RelayWaiting;
+		relay_mode = true;
+		connect_timer = 0;
+		name_window->SetVisible(false);
+		hostjoin_window->SetVisible(false);
+		mode_window->SetVisible(false);
+		ip_window->SetVisible(false);
+		browser_window->SetVisible(false);
+		browser_info_window->SetVisible(false);
+		status_window->SetText("Joining room via Discord...");
+		status_window->SetVisible(true);
+		playerlist_window->SetVisible(true);
+		help_window->SetText(fmt::format("Joining room {}...", room_code));
+	});
 }
 
 void Scene_MultiplayerLobby::CreateWindows() {
 	help_window = std::make_unique<Window_Help>(0, 0, Player::screen_width, 32);
-	help_window->SetText("Enter your name (UP/DOWN change, L/R move)");
+	if (DiscordIntegration::IsEnabled() && DiscordIntegration::HasDiscordUser()) {
+		help_window->SetText(fmt::format("Discord: {} - UP/DOWN change, L/R move",
+			DiscordIntegration::GetDiscordUsername()));
+	} else {
+		help_window->SetText("Enter your name (UP/DOWN change, L/R move)");
+	}
 
 	// Name entry display
 	name_window = std::make_unique<Window_Help>(
@@ -390,11 +446,23 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 		start_window->SetVisible(false);
 		hostjoin_window->SetVisible(true);
 		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
+		// Clear Discord multiplayer presence
+		DiscordIntegration::ClearMultiplayerPresence();
 		return;
 	}
 
 	// Refresh player list
 	RefreshPlayerList();
+
+	// Update Discord party size
+	if (DiscordIntegration::IsEnabled() && net.IsRelay() && net.HasRelayRoomCode()) {
+		auto& props = GetModeProperties(net.GetMode());
+		int max_players = props.max_players > 0 ? props.max_players : 32;
+		DiscordIntegration::SetPartyInfo(
+			"room_" + net.GetRelayRoomCode(),
+			static_cast<int>(net.GetPeers().size()) + 1,
+			max_players);
+	}
 
 	if (net.IsHost()) {
 		start_window->Update();
@@ -518,6 +586,7 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 		start_window->SetVisible(false);
 		hostjoin_window->SetVisible(true);
 		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
+		DiscordIntegration::ClearMultiplayerPresence();
 		return;
 	}
 
@@ -528,6 +597,16 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 			auto mode = net.GetMode();
 			auto& props = GetModeProperties(mode);
 			status_window->SetText(fmt::format("Room: {}  Mode: {}", code, props.name));
+
+			// Set Discord join secret so people can join via Discord
+			if (DiscordIntegration::IsEnabled()) {
+				DiscordIntegration::SetJoinSecret(code);
+				int max_players = props.max_players > 0 ? props.max_players : 32;
+				DiscordIntegration::SetPartyInfo(
+					"room_" + code,
+					static_cast<int>(net.GetPeers().size()) + 1,
+					max_players);
+			}
 
 			// Transition to main waiting lobby
 			state = LobbyState::Waiting;

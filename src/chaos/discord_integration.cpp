@@ -29,6 +29,7 @@
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <functional>
 
 namespace {
 
@@ -47,22 +48,62 @@ bool enabled = true;
 std::string details_buf;
 std::string state_buf;
 
+// Discord user info (populated on ready)
+std::string discord_username;
+std::string discord_user_id;
+bool has_discord_user = false;
+
+// Multiplayer presence data
+std::string join_secret_buf;
+std::string party_id_buf;
+int party_current_size = 0;
+int party_max_size = 0;
+
+// Join callback
+std::function<void(const std::string&)> join_callback;
+
 // ── Discord event handlers ─────────────────────────────────────────────────────
 
 void OnReady(const DiscordUser* user) {
-	if (user && user->username) {
-		Output::Debug("Discord RPC: Connected as {}", user->username);
+	if (user) {
+		if (user->username) {
+			discord_username = user->username;
+			Output::Debug("Discord RPC: Connected as {}", user->username);
+		}
+		if (user->userId) {
+			discord_user_id = user->userId;
+		}
+		has_discord_user = true;
 	} else {
-		Output::Debug("Discord RPC: Connected");
+		Output::Debug("Discord RPC: Connected (no user info)");
 	}
 }
 
 void OnDisconnected(int errorCode, const char* message) {
 	Output::Debug("Discord RPC: Disconnected ({}: {})", errorCode, message ? message : "");
+	has_discord_user = false;
+	discord_username.clear();
+	discord_user_id.clear();
 }
 
 void OnErrored(int errorCode, const char* message) {
 	Output::Debug("Discord RPC: Error ({}: {})", errorCode, message ? message : "");
+}
+
+void OnJoinGame(const char* secret) {
+	if (!secret) return;
+	std::string room_code(secret);
+	Output::Debug("Discord RPC: Join request for room {}", room_code);
+	if (join_callback) {
+		join_callback(room_code);
+	}
+}
+
+void OnJoinRequest(const DiscordUser* request) {
+	if (!request || !request->userId) return;
+	Output::Debug("Discord RPC: Join request from {}", request->username ? request->username : "unknown");
+	// Auto-accept join requests
+	Discord_Respond(request->userId, DISCORD_REPLY_YES);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -131,6 +172,8 @@ void Chaos::DiscordIntegration::Initialize() {
 	handlers.ready = OnReady;
 	handlers.disconnected = OnDisconnected;
 	handlers.errored = OnErrored;
+	handlers.joinGame = OnJoinGame;
+	handlers.joinRequest = OnJoinRequest;
 
 	Discord_Initialize(APPLICATION_ID, &handlers, 1, nullptr);
 
@@ -146,6 +189,12 @@ void Chaos::DiscordIntegration::Shutdown() {
 	Discord_ClearPresence();
 	Discord_Shutdown();
 	initialized = false;
+	has_discord_user = false;
+	discord_username.clear();
+	discord_user_id.clear();
+	join_secret_buf.clear();
+	party_id_buf.clear();
+	join_callback = nullptr;
 
 	Output::Debug("Discord RPC: Shut down");
 }
@@ -205,6 +254,16 @@ void Chaos::DiscordIntegration::Update() {
 	presence.largeImageKey = "icon";
 	presence.largeImageText = "EasyRPG Player (Chaos Fork)";
 
+	// Multiplayer join/party info
+	if (!join_secret_buf.empty()) {
+		presence.joinSecret = join_secret_buf.c_str();
+	}
+	if (!party_id_buf.empty()) {
+		presence.partyId = party_id_buf.c_str();
+		presence.partySize = party_current_size;
+		presence.partyMax = party_max_size;
+	}
+
 	Discord_UpdatePresence(&presence);
 }
 
@@ -226,4 +285,44 @@ void Chaos::DiscordIntegration::SetEnabled(bool value) {
 		}
 	}
 	Output::Debug("Discord RPC: {}", enabled ? "Enabled" : "Disabled");
+}
+
+bool Chaos::DiscordIntegration::HasDiscordUser() {
+	return has_discord_user;
+}
+
+const std::string& Chaos::DiscordIntegration::GetDiscordUsername() {
+	return discord_username;
+}
+
+const std::string& Chaos::DiscordIntegration::GetDiscordUserId() {
+	return discord_user_id;
+}
+
+void Chaos::DiscordIntegration::SetJoinSecret(const std::string& secret) {
+	join_secret_buf = secret;
+	// Force an immediate presence update
+	last_update_time = {};
+	Output::Debug("Discord RPC: Join secret set to '{}'", secret.empty() ? "(cleared)" : secret);
+}
+
+void Chaos::DiscordIntegration::SetPartyInfo(const std::string& party_id, int current_size, int max_size) {
+	party_id_buf = party_id;
+	party_current_size = current_size;
+	party_max_size = max_size;
+	// Force an immediate presence update
+	last_update_time = {};
+}
+
+void Chaos::DiscordIntegration::ClearMultiplayerPresence() {
+	join_secret_buf.clear();
+	party_id_buf.clear();
+	party_current_size = 0;
+	party_max_size = 0;
+	last_update_time = {};
+	Output::Debug("Discord RPC: Multiplayer presence cleared");
+}
+
+void Chaos::DiscordIntegration::SetJoinCallback(std::function<void(const std::string&)> callback) {
+	join_callback = std::move(callback);
 }

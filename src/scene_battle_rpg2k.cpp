@@ -2251,6 +2251,23 @@ void Scene_Battle_Rpg2k::PushItemRecievedMessages(PendingMessage& pm, std::vecto
 }
 
 bool Scene_Battle_Rpg2k::CheckBattleEndConditions() {
+	// Check if remote player ended battle (team/chaotix sync)
+	auto& mp = Chaos::MultiplayerState::Instance();
+	if (mp.IsActive() && mp.HasRemoteBattleEnded()) {
+		int result = mp.GetRemoteBattleResult();
+		mp.ConsumeRemoteBattleEnd();
+		if (result == static_cast<int>(BattleResult::Defeat)) {
+			if (state != State_Defeat) {
+				SetState(State_Defeat);
+			}
+		} else {
+			if (state != State_Victory) {
+				SetState(State_Victory);
+			}
+		}
+		return true;
+	}
+
 	if (state == State_Defeat || Game_Battle::CheckLose()) {
 		if (state != State_Defeat) {
 			SetState(State_Defeat);

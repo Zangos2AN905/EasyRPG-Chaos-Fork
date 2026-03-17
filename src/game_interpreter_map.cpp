@@ -364,7 +364,7 @@ bool Game_Interpreter_Map::CommandEnemyEncounter(lcf::rpg::EventCommand const& c
 		auto orig_callback = args.on_battle_end;
 		mp.OnBattleStarted(args.troop_id, args.terrain_id, args.first_strike, args.allow_escape);
 		args.on_battle_end = [orig_callback](BattleResult result) {
-			Chaos::MultiplayerState::Instance().OnBattleEnded();
+			Chaos::MultiplayerState::Instance().OnBattleEnded(static_cast<int>(result));
 			if (orig_callback) orig_callback(result);
 		};
 	}

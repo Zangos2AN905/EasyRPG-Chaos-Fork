@@ -289,6 +289,11 @@ void Scene_Map::UpdateSceneCalling() {
 			mp.ConsumeForcedBattle();
 			return;
 		}
+		// Handle forced map change from Chaotix mode
+		if (mp.IsActive() && mp.HasForcedMapChange()) {
+			mp.ConsumeForcedMapChange();
+			return;
+		}
 	}
 
 	if (call == nullptr) {

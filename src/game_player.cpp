@@ -295,7 +295,7 @@ void Game_Player::UpdateNextMovementAction() {
 				auto orig_callback = args.on_battle_end;
 				mp.OnBattleStarted(args.troop_id, args.terrain_id, args.first_strike, args.allow_escape);
 				args.on_battle_end = [orig_callback](BattleResult result) {
-					Chaos::MultiplayerState::Instance().OnBattleEnded();
+					Chaos::MultiplayerState::Instance().OnBattleEnded(static_cast<int>(result));
 					if (orig_callback) orig_callback(result);
 				};
 			}
@@ -457,7 +457,10 @@ bool Game_Player::CheckEventTriggerHere(TriggerSet triggers, bool triggered_by_d
 				&& trigger >= 0
 				&& triggers[trigger]) {
 			SetEncounterCalling(false);
-			result |= ev.ScheduleForegroundExecution(triggered_by_decision_key, face_player);
+			if (ev.ScheduleForegroundExecution(triggered_by_decision_key, face_player)) {
+				result = true;
+				Chaos::MultiplayerState::Instance().OnEventTriggered(ev.GetId(), triggered_by_decision_key);
+			}
 		}
 	}
 	return result;
@@ -478,7 +481,10 @@ bool Game_Player::CheckEventTriggerThere(TriggerSet triggers, int x, int y, bool
 				&& trigger >= 0
 				&& triggers[trigger]) {
 			SetEncounterCalling(false);
-			result |= ev.ScheduleForegroundExecution(triggered_by_decision_key, face_player);
+			if (ev.ScheduleForegroundExecution(triggered_by_decision_key, face_player)) {
+				result = true;
+				Chaos::MultiplayerState::Instance().OnEventTriggered(ev.GetId(), triggered_by_decision_key);
+			}
 		}
 	}
 	return result;
@@ -653,6 +659,12 @@ Game_Vehicle* Game_Player::GetVehicle() const {
 bool Game_Player::Move(int dir) {
 	if (!IsStopping()) {
 		return true;
+	}
+
+	// Chaotix rubber band: block movement away from partner at max range
+	if (Chaos::MultiplayerState::Instance().ShouldBlockMovement(dir)) {
+		SetFacing(dir);
+		return false;
 	}
 
 	Game_Character::Move(dir);

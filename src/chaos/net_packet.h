@@ -54,6 +54,15 @@ enum class PacketType : uint8_t {
 
 	// Battle escape voting
 	BattleEscapeVote, // Player -> All: escape vote (wants_escape bool)
+
+	// Chaotix map sync
+	MapChangeForce,   // Server -> All: force teleport to a map (chaotix)
+
+	// Actor state sync (chaotix)
+	ActorStateSync,   // Host -> All: actor HP/SP/states (chaotix)
+
+	// Event trigger sync (chaotix)
+	EventTriggerSync, // Player -> All: event was triggered by a player
 };
 
 // Simple packet buffer for serialization

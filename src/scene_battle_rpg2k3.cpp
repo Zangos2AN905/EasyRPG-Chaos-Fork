@@ -43,6 +43,7 @@
 #include "scene_gameover.h"
 #include "utils.h"
 #include "font.h"
+#include "chaos/multiplayer_state.h"
 #include "output.h"
 #include "autobattle.h"
 #include "enemyai.h"
@@ -998,6 +999,23 @@ void Scene_Battle_Rpg2k3::NextTurn(Game_Battler* battler) {
 }
 
 bool Scene_Battle_Rpg2k3::CheckBattleEndConditions() {
+	// Check if remote player ended battle (team/chaotix sync)
+	auto& mp = Chaos::MultiplayerState::Instance();
+	if (mp.IsActive() && mp.HasRemoteBattleEnded()) {
+		int result = mp.GetRemoteBattleResult();
+		mp.ConsumeRemoteBattleEnd();
+		if (result == static_cast<int>(BattleResult::Defeat)) {
+			if (state != State_Defeat) {
+				SetState(State_Defeat);
+			}
+		} else {
+			if (state != State_Victory) {
+				SetState(State_Victory);
+			}
+		}
+		return true;
+	}
+
 	if (state == State_Defeat || Game_Battle::CheckLose()) {
 		if (state != State_Defeat) {
 			SetState(State_Defeat);

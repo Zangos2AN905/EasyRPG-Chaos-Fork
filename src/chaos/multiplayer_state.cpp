@@ -5,6 +5,8 @@
 #include "chaos/multiplayer_state.h"
 #include "chaos/net_manager.h"
 #include "chaos/net_packet.h"
+#include "chaos/drawable_rubber_band.h"
+#include "chaos/discord_integration.h"
 #include "game_actor.h"
 #include "game_actors.h"
 #include "game_event.h"
@@ -24,6 +26,7 @@
 #include "spriteset_map.h"
 #include "sprite_character.h"
 #include "window_help.h"
+#include <cmath>
 #include <fmt/format.h>
 
 namespace Chaos {
@@ -50,12 +53,22 @@ void MultiplayerState::StopMultiplayer() {
 	in_battle = false;
 	pending_battle_invite = false;
 	forced_battle = false;
+	forced_map_change = false;
+	forced_map_id = 0;
+	forced_map_x = 0;
+	forced_map_y = 0;
+	remote_battle_ended = false;
+	remote_battle_result = 0;
+	last_actor_states.clear();
+	actor_state_sync_counter = 0;
+	DestroyRubberBandDrawable();
 	battle_invite_window.reset();
 	remote_battle_actions.clear();
 	remote_players.clear();
 	last_switches.clear();
 	last_variables.clear();
 	current_spriteset = nullptr;
+	DiscordIntegration::ClearMultiplayerPresence();
 	Output::Debug("Multiplayer: State manager stopped");
 }
 
@@ -118,6 +131,15 @@ void MultiplayerState::Update() {
 		CheckAndSyncVariables();
 	}
 
+	// Sync actor states (HP/SP/conditions) in Chaotix mode
+	if (props.sync_actor_states && net.IsHost()) {
+		actor_state_sync_counter++;
+		if (actor_state_sync_counter >= ACTOR_STATE_SYNC_INTERVAL) {
+			actor_state_sync_counter = 0;
+			CheckAndSyncActorStates();
+		}
+	}
+
 	// Sync event positions from host to clients
 	if (net.IsHost()) {
 		event_sync_counter++;
@@ -136,6 +158,11 @@ void MultiplayerState::Update() {
 	if (pending_battle_invite && !in_battle) {
 		UpdateBattleInvite();
 	}
+
+	// Update Chaotix rubber band
+	if (props.proximity_required && !in_battle) {
+		UpdateRubberBand();
+	}
 }
 
 void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
@@ -150,6 +177,11 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 
 	// Host: notify clients which map we loaded so they can join
 	auto& net = NetManager::Instance();
+
+	// Create rubber band drawable for Chaotix mode
+	if (net.IsConnected() && GetModeProperties(net.GetMode()).proximity_required) {
+		CreateRubberBandDrawable();
+	}
 	if (net.IsHost() && net.IsConnected()) {
 		auto* hero = Main_Data::game_player.get();
 		if (hero) {
@@ -195,11 +227,22 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 				}
 				net.Broadcast(var_pw, true);
 			}
+
+			// Chaotix mode: force all clients to follow the host's map change
+			if (net.GetMode() == MultiplayerMode::Chaotix) {
+				PacketWriter fpw(PacketType::MapChangeForce);
+				fpw.write(static_cast<int32_t>(map_id));
+				fpw.write(static_cast<int32_t>(x));
+				fpw.write(static_cast<int32_t>(y));
+				net.Broadcast(fpw, true);
+				Output::Debug("Multiplayer: Chaotix host map force to map {}", map_id);
+			}
 		}
 	}
 }
 
 void MultiplayerState::OnMapUnloaded() {
+	DestroyRubberBandDrawable();
 	current_spriteset = nullptr;
 }
 
@@ -328,6 +371,15 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 		case PacketType::BattleEscapeVote:
 			HandleBattleEscapeVote(sender_id, data, len);
 			break;
+		case PacketType::MapChangeForce:
+			HandleMapChangeForce(data, len);
+			break;
+		case PacketType::ActorStateSync:
+			HandleActorStateSync(data, len);
+			break;
+		case PacketType::EventTriggerSync:
+			HandleEventTriggerSync(data, len);
+			break;
 		default:
 			break;
 	}
@@ -361,6 +413,7 @@ void MultiplayerState::HandlePlayerPosition(uint16_t sender_id, const uint8_t* d
 	}
 
 	bool was_on_map = rp->IsOnCurrentMap();
+	int old_map_id = rp->GetMapId();
 	rp->SetNetworkPosition(map_id, x, y, direction, facing);
 	if (!sprite_name.empty()) {
 		rp->SetCharacterSprite(sprite_name, sprite_index);
@@ -373,6 +426,28 @@ void MultiplayerState::HandlePlayerPosition(uint16_t sender_id, const uint8_t* d
 			CreateRemotePlayerSprite(rp);
 		}
 		// Note: sprite removal on map change happens when we change maps
+	}
+
+	// Chaotix mode: when a remote player changes map, force all players to follow
+	auto& net = NetManager::Instance();
+	if (net.IsHost() && net.GetMode() == MultiplayerMode::Chaotix) {
+		if (old_map_id != map_id && old_map_id > 0 && map_id > 0) {
+			// Broadcast MapChangeForce to all clients
+			PacketWriter fpw(PacketType::MapChangeForce);
+			fpw.write(static_cast<int32_t>(map_id));
+			fpw.write(static_cast<int32_t>(x));
+			fpw.write(static_cast<int32_t>(y));
+			net.Broadcast(fpw, true);
+			Output::Debug("Multiplayer: Chaotix map force from peer {} to map {}", actual_id, map_id);
+
+			// Host also follows if not already on that map
+			if (Game_Map::GetMapId() != map_id && !forced_map_change) {
+				forced_map_change = true;
+				forced_map_id = map_id;
+				forced_map_x = x;
+				forced_map_y = y;
+			}
+		}
 	}
 }
 
@@ -725,7 +800,7 @@ void MultiplayerState::OnBattleStarted(int troop_id, int terrain_id, bool first_
 	Output::Debug("Multiplayer: Battle started, troop={}, seed={}", troop_id, battle_seed);
 }
 
-void MultiplayerState::OnBattleEnded() {
+void MultiplayerState::OnBattleEnded(int result) {
 	in_battle = false;
 	remote_battle_actions.clear();
 	turn_sync_received = false;
@@ -733,10 +808,13 @@ void MultiplayerState::OnBattleEnded() {
 	local_escape_wants = false;
 	remote_escape_voted = false;
 	remote_escape_wants = false;
+	remote_battle_ended = false;
+	remote_battle_result = 0;
 
 	auto& net = NetManager::Instance();
 	PacketWriter pw(PacketType::BattleEnd);
 	pw.write(net.GetLocalPeerId());
+	pw.write(static_cast<uint8_t>(result));
 
 	if (net.IsHost()) {
 		net.Broadcast(pw, true);
@@ -744,7 +822,7 @@ void MultiplayerState::OnBattleEnded() {
 		net.SendToServer(pw, true);
 	}
 
-	Output::Debug("Multiplayer: Battle ended");
+	Output::Debug("Multiplayer: Battle ended, result={}", result);
 }
 
 void MultiplayerState::HandleBattleStart(uint16_t sender_id, const uint8_t* data, size_t len) {
@@ -859,9 +937,20 @@ void MultiplayerState::HandleBattleAction(const uint8_t* data, size_t len) {
 void MultiplayerState::HandleBattleEnd(const uint8_t* data, size_t len) {
 	PacketReader reader(data, len);
 	reader.readType();
-	// Other player's battle ended
 	uint16_t peer_id = reader.readU16();
-	Output::Debug("Multiplayer: Peer {} ended their battle", peer_id);
+	uint8_t result = reader.readU8();
+
+	auto& net = NetManager::Instance();
+	auto mode = net.GetMode();
+
+	// In team/chaotix modes, force local battle to end with the same result
+	if (in_battle && (mode == MultiplayerMode::TeamParty || mode == MultiplayerMode::Chaotix)) {
+		remote_battle_ended = true;
+		remote_battle_result = static_cast<int>(result);
+		Output::Debug("Multiplayer: Remote peer {} battle ended with result={}, forcing local end", peer_id, result);
+	} else {
+		Output::Debug("Multiplayer: Peer {} ended their battle, result={}", peer_id, result);
+	}
 }
 
 void MultiplayerState::AcceptBattleInvite() {
@@ -890,8 +979,8 @@ void MultiplayerState::AcceptBattleInvite() {
 	args.condition = lcf::rpg::System::BattleCondition_none;
 
 	Game_Map::SetupBattle(args);
-	args.on_battle_end = [](BattleResult) {
-		MultiplayerState::Instance().OnBattleEnded();
+	args.on_battle_end = [](BattleResult result) {
+		MultiplayerState::Instance().OnBattleEnded(static_cast<int>(result));
 	};
 
 	Scene::instance->SetRequestedScene(Scene_Battle::Create(std::move(args)));
@@ -919,8 +1008,8 @@ void MultiplayerState::ConsumeForcedBattle() {
 	args.condition = lcf::rpg::System::BattleCondition_none;
 
 	Game_Map::SetupBattle(args);
-	args.on_battle_end = [](BattleResult) {
-		MultiplayerState::Instance().OnBattleEnded();
+	args.on_battle_end = [](BattleResult result) {
+		MultiplayerState::Instance().OnBattleEnded(static_cast<int>(result));
 	};
 
 	Scene::instance->SetRequestedScene(Scene_Battle::Create(std::move(args)));
@@ -1078,6 +1167,57 @@ void MultiplayerState::HandleEventSync(const uint8_t* data, size_t len) {
 	}
 }
 
+void MultiplayerState::OnEventTriggered(int event_id, bool by_decision_key) {
+	auto& net = NetManager::Instance();
+	if (!active) return;
+
+	// Only sync event triggers in Chaotix mode
+	if (net.GetMode() != MultiplayerMode::Chaotix) return;
+
+	PacketWriter pw(PacketType::EventTriggerSync);
+	pw.write(static_cast<uint16_t>(event_id));
+	pw.write(static_cast<uint8_t>(by_decision_key ? 1 : 0));
+
+	if (net.IsHost()) {
+		net.Broadcast(pw, true);
+	} else {
+		net.SendToServer(pw, true);
+	}
+
+	Output::Debug("Multiplayer: Broadcast event trigger sync for event {}", event_id);
+}
+
+void MultiplayerState::HandleEventTriggerSync(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+
+	// Only process in Chaotix mode
+	if (net.GetMode() != MultiplayerMode::Chaotix) return;
+
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t event_id = reader.readU16();
+	uint8_t by_decision_key = reader.readU8();
+
+	// If host, relay to other clients
+	if (net.IsHost()) {
+		PacketWriter rpw(PacketType::EventTriggerSync);
+		rpw.write(event_id);
+		rpw.write(by_decision_key);
+		net.Broadcast(rpw, true);
+	}
+
+	// Schedule the event for execution locally
+	Game_Event* ev = Game_Map::GetEvent(event_id);
+	if (!ev) return;
+
+	// Don't re-trigger if already running or waiting
+	if (ev->IsWaitingForegroundExecution()) return;
+
+	ev->ScheduleForegroundExecution(by_decision_key != 0, false);
+	Output::Debug("Multiplayer: Remote event trigger applied for event {}", event_id);
+}
+
 void MultiplayerState::BroadcastTurnSync(int32_t seed) {
 	auto& net = NetManager::Instance();
 	PacketWriter pw(PacketType::BattleTurnSync);
@@ -1168,6 +1308,270 @@ void MultiplayerState::HandleBattleEscapeVote(uint16_t sender_id, const uint8_t*
 	remote_escape_voted = true;
 	remote_escape_wants = (wants != 0);
 	Output::Debug("Multiplayer: Received escape vote={}", wants != 0);
+}
+
+void MultiplayerState::HandleMapChangeForce(const uint8_t* data, size_t len) {
+	PacketReader reader(data, len);
+	reader.readType();
+
+	int32_t map_id = reader.readI32();
+	int32_t x = reader.readI32();
+	int32_t y = reader.readI32();
+
+	// Don't force if we're already on that map or a force is pending
+	if (Game_Map::GetMapId() == map_id || forced_map_change) return;
+
+	forced_map_change = true;
+	forced_map_id = map_id;
+	forced_map_x = x;
+	forced_map_y = y;
+	Output::Debug("Multiplayer: Forced map change to map={} x={} y={}", map_id, x, y);
+}
+
+void MultiplayerState::ConsumeForcedMapChange() {
+	if (!forced_map_change) return;
+	forced_map_change = false;
+
+	if (Main_Data::game_player && !Main_Data::game_player->IsPendingTeleport()) {
+		Main_Data::game_player->ReserveTeleport(
+			forced_map_id, forced_map_x, forced_map_y, -1,
+			TeleportTarget::eParallelTeleport);
+		Output::Debug("Multiplayer: Consuming forced map change to map={}", forced_map_id);
+	}
+}
+
+void MultiplayerState::CheckAndSyncActorStates() {
+	if (!Main_Data::game_party) return;
+	auto& net = NetManager::Instance();
+	auto actors = Main_Data::game_party->GetActors();
+
+	for (auto* actor : actors) {
+		int id = actor->GetId();
+		int hp = actor->GetHp();
+		int sp = actor->GetSp();
+		const auto& states = actor->GetStates();
+
+		auto it = last_actor_states.find(id);
+		if (it != last_actor_states.end()) {
+			auto& snap = it->second;
+			if (snap.hp == hp && snap.sp == sp && snap.states == states) {
+				continue; // No change
+			}
+			snap.hp = hp;
+			snap.sp = sp;
+			snap.states = states;
+		} else {
+			last_actor_states[id] = { hp, sp, states };
+		}
+
+		// Build packet: type, actor_id, hp, sp, state_count, [state values...]
+		PacketWriter pw(PacketType::ActorStateSync);
+		pw.write(static_cast<uint16_t>(id));
+		pw.write(static_cast<int32_t>(hp));
+		pw.write(static_cast<int32_t>(sp));
+		pw.write(static_cast<uint16_t>(states.size()));
+		for (auto s : states) {
+			pw.write(static_cast<uint16_t>(static_cast<uint16_t>(s)));
+		}
+		net.Broadcast(pw, true);
+	}
+}
+
+void MultiplayerState::HandleActorStateSync(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	// Only clients apply this (host is the source of truth)
+	if (net.IsHost()) return;
+
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t actor_id = reader.readU16();
+	int32_t hp = reader.readI32();
+	int32_t sp = reader.readI32();
+	uint16_t state_count = reader.readU16();
+	std::vector<int16_t> states(state_count);
+	for (uint16_t i = 0; i < state_count; i++) {
+		states[i] = static_cast<int16_t>(reader.readU16());
+	}
+
+	if (!Main_Data::game_party) return;
+
+	Game_Actor* actor = Main_Data::game_actors->GetActor(actor_id);
+	if (!actor) return;
+
+	actor->SetHp(hp);
+	actor->SetSp(sp);
+
+	// Overwrite the states vector directly
+	auto& actor_states = actor->GetStates();
+	actor_states = states;
+
+	Output::Debug("Multiplayer: Synced actor {} state: hp={} sp={} states={}", actor_id, hp, sp, state_count);
+}
+
+void MultiplayerState::CreateRubberBandDrawable() {
+	if (rubber_band) return;
+	rubber_band = std::make_unique<Drawable_RubberBand>();
+	rubber_band->SetVisible(false);
+}
+
+void MultiplayerState::DestroyRubberBandDrawable() {
+	rubber_band.reset();
+}
+
+void MultiplayerState::UpdateRubberBand() {
+	if (!rubber_band) return;
+
+	auto* hero = Main_Data::game_player.get();
+	if (!hero) {
+		rubber_band->SetVisible(false);
+		return;
+	}
+
+	// Find the closest remote player on the same map
+	Game_RemotePlayer* closest = nullptr;
+	int min_dist_sq = 0;
+	for (auto& [id, rp] : remote_players) {
+		if (!rp->IsOnCurrentMap()) continue;
+		int dx = rp->GetX() - hero->GetX();
+		int dy = rp->GetY() - hero->GetY();
+		int dist_sq = dx * dx + dy * dy;
+		if (!closest || dist_sq < min_dist_sq) {
+			closest = rp.get();
+			min_dist_sq = dist_sq;
+		}
+	}
+
+	if (!closest) {
+		rubber_band->SetVisible(false);
+		return;
+	}
+
+	float distance = std::sqrt(static_cast<float>(min_dist_sq));
+
+	// Always show the band between connected players
+	rubber_band->SetVisible(true);
+	rubber_band->SetEndpoints(hero, closest);
+
+	// Calculate stretch ratio: 0 when close, ramps up past RUBBER_BAND_RANGE
+	if (distance <= RUBBER_BAND_RANGE) {
+		rubber_band->SetStretchRatio(0.0f);
+	} else {
+		float range = static_cast<float>(RUBBER_BAND_MAX - RUBBER_BAND_RANGE);
+		float stretch = (distance - RUBBER_BAND_RANGE) / range;
+		rubber_band->SetStretchRatio(stretch);
+	}
+
+	// Apply snap-back pull when beyond max range
+	if (distance >= RUBBER_BAND_MAX) {
+		ApplyRubberBandPull();
+	}
+}
+
+bool MultiplayerState::ShouldBlockMovement(int dir) const {
+	if (!active) return false;
+
+	auto& net = NetManager::Instance();
+	if (!net.IsConnected()) return false;
+	if (!GetModeProperties(net.GetMode()).proximity_required) return false;
+	if (in_battle) return false;
+
+	auto* hero = Main_Data::game_player.get();
+	if (!hero) return false;
+
+	// Find the closest remote player on the same map
+	const Game_RemotePlayer* closest = nullptr;
+	int min_dist_sq = 0;
+	for (auto& [id, rp] : remote_players) {
+		if (!rp->IsOnCurrentMap()) continue;
+		int dx = rp->GetX() - hero->GetX();
+		int dy = rp->GetY() - hero->GetY();
+		int dist_sq = dx * dx + dy * dy;
+		if (!closest || dist_sq < min_dist_sq) {
+			closest = rp.get();
+			min_dist_sq = dist_sq;
+		}
+	}
+
+	if (!closest) return false;
+
+	float distance = std::sqrt(static_cast<float>(min_dist_sq));
+	if (distance < RUBBER_BAND_MAX) return false;
+
+	// At max range: only block movement that increases distance
+	int hx = hero->GetX();
+	int hy = hero->GetY();
+	int nx = hx;
+	int ny = hy;
+
+	// Calculate the tile position after the move
+	switch (dir) {
+		case Game_Character::Up:    ny--; break;
+		case Game_Character::Down:  ny++; break;
+		case Game_Character::Left:  nx--; break;
+		case Game_Character::Right: nx++; break;
+		case Game_Character::UpRight:   nx++; ny--; break;
+		case Game_Character::DownRight: nx++; ny++; break;
+		case Game_Character::DownLeft:  nx--; ny++; break;
+		case Game_Character::UpLeft:    nx--; ny--; break;
+		default: return false;
+	}
+
+	int rdx = closest->GetX() - nx;
+	int rdy = closest->GetY() - ny;
+	int new_dist_sq = rdx * rdx + rdy * rdy;
+
+	// Block only if the new position is further away than current
+	return new_dist_sq > min_dist_sq;
+}
+
+void MultiplayerState::ApplyRubberBandPull() {
+	auto* hero = Main_Data::game_player.get();
+	if (!hero || !hero->IsStopping()) return;
+
+	// Find the closest remote player
+	Game_RemotePlayer* closest = nullptr;
+	int min_dist_sq = 0;
+	for (auto& [id, rp] : remote_players) {
+		if (!rp->IsOnCurrentMap()) continue;
+		int dx = rp->GetX() - hero->GetX();
+		int dy = rp->GetY() - hero->GetY();
+		int dist_sq = dx * dx + dy * dy;
+		if (!closest || dist_sq < min_dist_sq) {
+			closest = rp.get();
+			min_dist_sq = dist_sq;
+		}
+	}
+
+	if (!closest) return;
+
+	int dx = closest->GetX() - hero->GetX();
+	int dy = closest->GetY() - hero->GetY();
+
+	// Determine direction toward partner
+	int pull_dir = -1;
+	if (std::abs(dx) >= std::abs(dy)) {
+		// Primarily horizontal
+		if (dx > 0 && dy < 0) pull_dir = Game_Character::UpRight;
+		else if (dx > 0 && dy > 0) pull_dir = Game_Character::DownRight;
+		else if (dx < 0 && dy < 0) pull_dir = Game_Character::UpLeft;
+		else if (dx < 0 && dy > 0) pull_dir = Game_Character::DownLeft;
+		else if (dx > 0) pull_dir = Game_Character::Right;
+		else if (dx < 0) pull_dir = Game_Character::Left;
+	} else {
+		// Primarily vertical
+		if (dy < 0 && dx > 0) pull_dir = Game_Character::UpRight;
+		else if (dy < 0 && dx < 0) pull_dir = Game_Character::UpLeft;
+		else if (dy > 0 && dx > 0) pull_dir = Game_Character::DownRight;
+		else if (dy > 0 && dx < 0) pull_dir = Game_Character::DownLeft;
+		else if (dy < 0) pull_dir = Game_Character::Up;
+		else if (dy > 0) pull_dir = Game_Character::Down;
+	}
+
+	if (pull_dir >= 0) {
+		// Force the player to move toward partner (snap-back)
+		hero->Move(pull_dir);
+	}
 }
 
 } // namespace Chaos
