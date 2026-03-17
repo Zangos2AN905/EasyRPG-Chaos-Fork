@@ -696,8 +696,8 @@ void Window_Settings::RefreshChaos() {
 		opt.mode = eOptionNone;
 		GetFrame().options.push_back(std::move(opt));
 	}
+	*/
 }
-*/
 void Window_Settings::RefreshInput() {
 	Game_ConfigInput& cfg = Input::GetInputSource()->GetConfig();
 
