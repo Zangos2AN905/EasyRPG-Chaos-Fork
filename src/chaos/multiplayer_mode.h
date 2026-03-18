@@ -15,6 +15,7 @@ enum class MultiplayerMode {
 	Chaotix,       // Like TeamParty but players must stay close
 	Pandora,       // Like Normal but switches/variables sync
 	GodMode,       // One controller, rest play normally
+	Horror,        // Dark survival mode with flashlight + battery
 	Count
 };
 
@@ -36,6 +37,7 @@ inline const ModeProperties& GetModeProperties(MultiplayerMode mode) {
 		{ "Chaotix",    "Team mode, but players must stay close together. Max 4.",       4, true,  true,  true,  true,  false },
 		{ "Pandora",    "Normal mode, but switches and variables sync.",                 0, true,  true,  false, false, false },
 		{ "God Mode",   "One player controls the game. Others play normally.",           0, false, false, false, false, true  },
+		{ "Horror",     "SURVIVE.",                                                    0, false, false, false, false, false },
 	};
 	return props[static_cast<int>(mode)];
 }

@@ -11,12 +11,14 @@
 #include <vector>
 #include "chaos/multiplayer_mode.h"
 #include "chaos/game_multiplayer.h"
+#include "chaos/game_rawberry.h"
 #include "chaos/drawable_rubber_band.h"
 #include "chaos/drawable_darkness_overlay.h"
 
 class Game_Actor;
 class Spriteset_Map;
 class Window_Help;
+class Sprite;
 
 namespace Chaos {
 
@@ -117,6 +119,19 @@ public:
 	/** Chaotix event trigger sync - called when local player triggers an event */
 	void OnEventTriggered(int event_id, bool by_decision_key);
 
+	/** God Mode - whether local player is the god */
+	bool IsLocalGod() const { return is_local_god; }
+	uint16_t GetGodPlayerId() const { return god_player_id; }
+	void AssignRandomGod();
+	void SendGodCommand(uint8_t cmd_type, const std::vector<int32_t>& args);
+
+	/** Horror Mode */
+	bool IsHorrorMode() const;
+	int GetBatteryPercent() const { return horror_battery_percent; }
+	bool IsFlashlightOn() const { return horror_flashlight_on; }
+	void ApplyHorrorMusicEffect();
+	Game_Rawberry* GetRawberry() { return rawberry.get(); }
+
 	/** Darkness/lighting overlay - accessible for game-driven configuration */
 	Drawable_DarknessOverlay* GetDarknessOverlay() { return darkness_overlay.get(); }
 
@@ -146,6 +161,7 @@ private:
 	void HandleSwitchSync(const uint8_t* data, size_t len);
 	void HandleVariableSync(const uint8_t* data, size_t len);
 	void HandleGodCommand(uint16_t sender_id, const uint8_t* data, size_t len);
+	void HandleGodAssign(const uint8_t* data, size_t len);
 	void HandleBattleStart(uint16_t sender_id, const uint8_t* data, size_t len);
 	void HandleBattleJoin(uint16_t sender_id, const uint8_t* data, size_t len);
 	void HandleBattleForce(const uint8_t* data, size_t len);
@@ -157,6 +173,7 @@ private:
 	void HandleMapChangeForce(const uint8_t* data, size_t len);
 	void HandleActorStateSync(const uint8_t* data, size_t len);
 	void HandleEventTriggerSync(const uint8_t* data, size_t len);
+	void HandleRawberrySync(const uint8_t* data, size_t len);
 
 	// Sync functions
 	void SendLocalPlayerPosition();
@@ -164,6 +181,7 @@ private:
 	void CheckAndSyncVariables();
 	void SyncEventPositions();
 	void CheckAndSyncActorStates();
+	void SendRawberrySync();
 
 	// Sprite management
 	void CreateRemotePlayerSprite(Game_RemotePlayer* player);
@@ -178,6 +196,13 @@ private:
 	void CreateRubberBandDrawable();
 	void DestroyRubberBandDrawable();
 	void ApplyRubberBandPull();
+
+	// Horror mode
+	void UpdateHorror();
+	void InitHorrorMode();
+	void CleanupHorrorMode();
+	void SpawnRawberry();
+	void CreateRawberrySprite();
 
 	bool active = false;
 	bool host_lost = false;
@@ -243,11 +268,39 @@ private:
 	static constexpr int POSITION_SEND_INTERVAL = 3; // Send every 3 frames
 	int event_sync_counter = 0;
 	static constexpr int EVENT_SYNC_INTERVAL = 6; // Send every 6 frames
+	int rawberry_sync_counter = 0;
+	static constexpr int RAWBERRY_SYNC_INTERVAL = 3; // Send every 3 frames
 
 	// Chaotix rubber band
 	std::unique_ptr<Drawable_RubberBand> rubber_band;
 	static constexpr int RUBBER_BAND_RANGE = 5;  // tiles before band starts stretching
 	static constexpr int RUBBER_BAND_MAX = 8;    // tiles max distance (blocks movement)
+
+	// God Mode state
+	bool is_local_god = false;
+	uint16_t god_player_id = 0;
+
+	// Horror Mode state
+	int horror_battery_percent = 100;  // 0-100
+	bool horror_flashlight_on = true;
+	int horror_battery_drain_counter = 0;
+	static constexpr int HORROR_BATTERY_DRAIN_INTERVAL = 180; // frames per 1% drain (~3 seconds at 60fps)
+	static constexpr int HORROR_FLASHLIGHT_RADIUS = 60;       // radius when flashlight is on
+	static constexpr int HORROR_DARKNESS_LEVEL = 245;         // near pitch black
+	std::unique_ptr<Window_Help> horror_battery_window;
+	std::string horror_current_map_music;  // Currently playing map-based horror music name
+	int horror_last_map_id = -1;           // Track map changes to switch horror music (-1 = force update)
+	std::string horror_overridden_bgm;     // Last game BGM we detected and overrode
+	int horror_music_override_delay = 0;   // Countdown frames to re-override after game BGM change
+
+	// Jumpscare state
+	bool horror_jumpscare_active = false;
+	int horror_jumpscare_timer = 0;
+	static constexpr int HORROR_JUMPSCARE_DURATION = 120; // frames (~2 seconds at 60fps)
+	std::unique_ptr<Sprite> horror_jumpscare_sprite;
+
+	// Rawberry enemy
+	std::unique_ptr<Game_Rawberry> rawberry;
 
 	// Darkness/lighting overlay
 	std::unique_ptr<Drawable_DarknessOverlay> darkness_overlay;

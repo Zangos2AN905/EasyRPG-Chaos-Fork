@@ -58,6 +58,12 @@ public:
 
 	void SE_Play(std::unique_ptr<AudioSeCache> se, int volume, int pitch, int balance) override;
 	void SE_Stop() override;
+
+	void BGS_Play(Filesystem_Stream::InputStream stream, int volume, int pitch, int balance) override;
+	void BGS_Stop() override;
+	void BGS_Volume(int volume) override;
+	void BGS_Balance(int balance) override;
+
 	virtual void Update() override;
 
 	void vGetConfig(Game_ConfigAudio&) const override {}
@@ -109,6 +115,7 @@ private:
 	static constexpr unsigned nr_of_bgm_channels = 2;
 
 	BgmChannel BGM_Channels[nr_of_bgm_channels];
+	BgmChannel bgs_channel;
 	SeChannel SE_Channels[nr_of_se_channels];
 	mutable bool BGM_PlayedOnceIndicator;
 

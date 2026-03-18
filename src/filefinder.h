@@ -107,6 +107,9 @@ namespace FileFinder {
 	/** @return A filesystem handle for file access inside the game directory */
 	FilesystemView Game();
 
+	/** @return A filesystem handle for the Chaos assets folder (next to the executable) */
+	FilesystemView ChaosAssets();
+
 	/**
 	 * Sets the game filesystem.
 	 *

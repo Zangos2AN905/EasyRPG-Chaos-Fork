@@ -11,11 +11,17 @@
 #include "game_actors.h"
 #include "game_event.h"
 #include "game_map.h"
+#include "game_interpreter.h"
 #include "game_party.h"
 #include "game_player.h"
 #include "game_switches.h"
 #include "game_variables.h"
 #include "game_system.h"
+#include "audio.h"
+#include "audio_secache.h"
+#include "bitmap.h"
+#include "cache.h"
+#include "filefinder.h"
 #include "input.h"
 #include "main_data.h"
 #include "output.h"
@@ -23,6 +29,8 @@
 #include "rand.h"
 #include "scene.h"
 #include "scene_battle.h"
+#include "scene_gameover.h"
+#include "sprite.h"
 #include "spriteset_map.h"
 #include "sprite_character.h"
 #include "window_help.h"
@@ -63,6 +71,9 @@ void MultiplayerState::StopMultiplayer() {
 	actor_state_sync_counter = 0;
 	DestroyRubberBandDrawable();
 	darkness_overlay.reset();
+	is_local_god = false;
+	god_player_id = 0;
+	CleanupHorrorMode();
 	battle_invite_window.reset();
 	remote_battle_actions.clear();
 	remote_players.clear();
@@ -109,11 +120,13 @@ void MultiplayerState::Update() {
 	// Only do gameplay sync when we're on a map (spriteset exists)
 	if (!current_spriteset) return;
 
-	// Send local player position periodically
-	position_send_counter++;
-	if (position_send_counter >= POSITION_SEND_INTERVAL) {
-		position_send_counter = 0;
-		SendLocalPlayerPosition();
+	// Send local player position periodically (skip if spectating — we're dead)
+	if (!spectating) {
+		position_send_counter++;
+		if (position_send_counter >= POSITION_SEND_INTERVAL) {
+			position_send_counter = 0;
+			SendLocalPlayerPosition();
+		}
 	}
 
 	// Update remote player characters (movement animation, stepping)
@@ -173,6 +186,11 @@ void MultiplayerState::Update() {
 	if (props.proximity_required && !in_battle) {
 		UpdateRubberBand();
 	}
+
+	// Update Horror mode
+	if (net.GetMode() == MultiplayerMode::Horror) {
+		UpdateHorror();
+	}
 }
 
 void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
@@ -180,7 +198,7 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 
 	// Create sprites for all remote players that are on this map
 	for (auto& [id, player] : remote_players) {
-		if (player->IsOnCurrentMap()) {
+		if (player && player->IsOnCurrentMap()) {
 			CreateRemotePlayerSprite(player.get());
 		}
 	}
@@ -197,6 +215,12 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 	if (!darkness_overlay) {
 		darkness_overlay = std::make_unique<Drawable_DarknessOverlay>();
 	}
+
+	// Initialize Horror mode on map load (skip if spectating — already dead)
+	if (net.IsConnected() && net.GetMode() == MultiplayerMode::Horror && !spectating) {
+		InitHorrorMode();
+	}
+
 	if (net.IsHost() && net.IsConnected()) {
 		auto* hero = Main_Data::game_player.get();
 		if (hero) {
@@ -355,6 +379,16 @@ void MultiplayerState::OnPlayerDisconnected(uint16_t peer_id) {
 	RemoveRemotePlayerSprite(peer_id);
 	remote_players.erase(peer_id);
 	Output::Debug("Multiplayer: Removed remote player for peer {}", peer_id);
+
+	// If we were spectating the disconnected player, switch target
+	if (spectating && spectate_target_id == peer_id) {
+		CycleSpectateTarget(1);
+		if (spectate_target_id == peer_id || remote_players.empty()) {
+			// No one left to spectate — game over
+			ExitSpectatorMode();
+			Scene::Push(std::make_shared<Scene_Gameover>());
+		}
+	}
 }
 
 void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data, size_t len) {
@@ -375,6 +409,9 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 			break;
 		case PacketType::GodCommand:
 			HandleGodCommand(sender_id, data, len);
+			break;
+		case PacketType::GodAssign:
+			HandleGodAssign(data, len);
 			break;
 		case PacketType::BattleStart:
 			HandleBattleStart(sender_id, data, len);
@@ -408,6 +445,9 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 			break;
 		case PacketType::EventTriggerSync:
 			HandleEventTriggerSync(data, len);
+			break;
+		case PacketType::RawberrySync:
+			HandleRawberrySync(data, len);
 			break;
 		default:
 			break;
@@ -508,9 +548,8 @@ void MultiplayerState::HandleGodCommand(uint16_t sender_id, const uint8_t* data,
 	auto& net = NetManager::Instance();
 	if (net.GetMode() != MultiplayerMode::GodMode) return;
 
-	// Only the god player (peer_id 1, the host) can send god commands
-	auto* pi = net.FindPeer(sender_id);
-	if (!pi || !pi->is_god) return;
+	// Only the assigned god player can send god commands
+	if (sender_id != god_player_id) return;
 
 	PacketReader reader(data, len);
 	reader.readType();
@@ -536,7 +575,7 @@ void MultiplayerState::HandleGodCommand(uint16_t sender_id, const uint8_t* data,
 			break;
 		}
 		case 2: {
-			// Teleport player
+			// Teleport all players
 			int32_t map_id = reader.readI32();
 			int32_t x = reader.readI32();
 			int32_t y = reader.readI32();
@@ -545,9 +584,135 @@ void MultiplayerState::HandleGodCommand(uint16_t sender_id, const uint8_t* data,
 			}
 			break;
 		}
+		case 3: {
+			// Change gold
+			int32_t amount = reader.readI32();
+			if (Main_Data::game_party) {
+				if (amount >= 0) {
+					Main_Data::game_party->GainGold(amount);
+				} else {
+					Main_Data::game_party->LoseGold(-amount);
+				}
+			}
+			break;
+		}
+		case 4: {
+			// Full heal all party
+			if (Main_Data::game_party) {
+				auto& actors = Main_Data::game_party->GetActors();
+				for (auto* actor : actors) {
+					actor->FullHeal();
+				}
+			}
+			break;
+		}
+		case 5: {
+			// Change level of actor
+			int32_t actor_id = reader.readI32();
+			int32_t new_level = reader.readI32();
+			auto* actor = Main_Data::game_actors->GetActor(actor_id);
+			if (actor) {
+				actor->ChangeLevel(new_level, nullptr);
+			}
+			break;
+		}
+		case 6: {
+			// Change HP of actor
+			int32_t actor_id = reader.readI32();
+			int32_t new_hp = reader.readI32();
+			auto* actor = Main_Data::game_actors->GetActor(actor_id);
+			if (actor) {
+				actor->SetHp(new_hp);
+			}
+			break;
+		}
+		case 7: {
+			// Change SP of actor
+			int32_t actor_id = reader.readI32();
+			int32_t new_sp = reader.readI32();
+			auto* actor = Main_Data::game_actors->GetActor(actor_id);
+			if (actor) {
+				actor->SetSp(new_sp);
+			}
+			break;
+		}
+		case 8: {
+			// Give/remove item
+			int32_t item_id = reader.readI32();
+			int32_t amount = reader.readI32();
+			if (Main_Data::game_party) {
+				if (amount >= 0) {
+					Main_Data::game_party->AddItem(item_id, amount);
+				} else {
+					Main_Data::game_party->RemoveItem(item_id, -amount);
+				}
+			}
+			break;
+		}
 		default:
 			break;
 	}
+}
+
+void MultiplayerState::HandleGodAssign(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	if (net.GetMode() != MultiplayerMode::GodMode) return;
+
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t assigned_id = reader.readU16();
+	god_player_id = assigned_id;
+	is_local_god = (assigned_id == net.GetLocalPeerId());
+
+	// Set is_god flag on the right peer
+	for (auto& p : const_cast<std::vector<PeerInfo>&>(net.GetPeers())) {
+		p.is_god = (p.peer_id == assigned_id);
+	}
+
+	if (is_local_god) {
+		Output::Debug("Multiplayer: You are the God player!");
+	} else {
+		Output::Debug("Multiplayer: God player is peer {}", assigned_id);
+	}
+}
+
+void MultiplayerState::AssignRandomGod() {
+	auto& net = NetManager::Instance();
+	if (net.GetMode() != MultiplayerMode::GodMode) return;
+
+	// Build list of all peer IDs including host
+	std::vector<uint16_t> all_ids;
+	all_ids.push_back(net.GetLocalPeerId()); // host (peer 1)
+	for (auto& p : net.GetPeers()) {
+		all_ids.push_back(p.peer_id);
+	}
+
+	// Pick a random one
+	int idx = Rand::GetRandomNumber(0, static_cast<int32_t>(all_ids.size()) - 1);
+	uint16_t chosen = all_ids[idx];
+
+	god_player_id = chosen;
+	is_local_god = (chosen == net.GetLocalPeerId());
+
+	// Broadcast GodAssign to all clients
+	PacketWriter packet(PacketType::GodAssign);
+	packet.write(chosen);
+	net.Broadcast(packet, true);
+
+	Output::Debug("Multiplayer: Assigned god player to peer {}", chosen);
+}
+
+void MultiplayerState::SendGodCommand(uint8_t cmd_type, const std::vector<int32_t>& args) {
+	auto& net = NetManager::Instance();
+	if (!is_local_god) return;
+
+	PacketWriter packet(PacketType::GodCommand);
+	packet.write(cmd_type);
+	for (auto arg : args) {
+		packet.write(arg);
+	}
+	net.Broadcast(packet, true);
 }
 
 void MultiplayerState::SendLocalPlayerPosition() {
@@ -648,7 +813,7 @@ Game_RemotePlayer* MultiplayerState::GetRemotePlayer(uint16_t peer_id) {
 bool MultiplayerState::ShouldInterceptGameOver() {
 	if (!active) return false;
 	EnterSpectatorMode();
-	return true;
+	return spectating;
 }
 
 void MultiplayerState::EnterSpectatorMode() {
@@ -657,7 +822,7 @@ void MultiplayerState::EnterSpectatorMode() {
 	// Find first remote player on current map as target
 	spectate_target_id = 0;
 	for (auto& [id, rp] : remote_players) {
-		if (rp->IsOnCurrentMap()) {
+		if (rp && rp->IsOnCurrentMap()) {
 			spectate_target_id = id;
 			break;
 		}
@@ -747,6 +912,8 @@ void MultiplayerState::UpdateSpectator() {
 		target = GetRemotePlayer(spectate_target_id);
 		if (!target) {
 			ExitSpectatorMode();
+			// All players gone — game over
+			Scene::Push(std::make_shared<Scene_Gameover>());
 			return;
 		}
 	}
@@ -1212,12 +1379,17 @@ void MultiplayerState::OnEventTriggered(int event_id, bool by_decision_key) {
 	auto& net = NetManager::Instance();
 	if (!active) return;
 
-	// Only sync event triggers in Chaotix mode
-	if (net.GetMode() != MultiplayerMode::Chaotix) return;
+	// Include the active page ID so spectators can run the correct page
+	int page_id = 0;
+	Game_Event* ev = Game_Map::GetEvent(event_id);
+	if (ev && ev->GetActivePage()) {
+		page_id = ev->GetActivePage()->ID;
+	}
 
 	PacketWriter pw(PacketType::EventTriggerSync);
 	pw.write(static_cast<uint16_t>(event_id));
 	pw.write(static_cast<uint8_t>(by_decision_key ? 1 : 0));
+	pw.write(static_cast<int32_t>(page_id));
 
 	if (net.IsHost()) {
 		net.Broadcast(pw, true);
@@ -1225,26 +1397,28 @@ void MultiplayerState::OnEventTriggered(int event_id, bool by_decision_key) {
 		net.SendToServer(pw, true);
 	}
 
-	Output::Debug("Multiplayer: Broadcast event trigger sync for event {}", event_id);
+	Output::Debug("Multiplayer: Broadcast event trigger sync for event {} page {}", event_id, page_id);
 }
 
 void MultiplayerState::HandleEventTriggerSync(const uint8_t* data, size_t len) {
 	auto& net = NetManager::Instance();
 
-	// Only process in Chaotix mode
-	if (net.GetMode() != MultiplayerMode::Chaotix) return;
+	// Process in Chaotix mode or when spectating
+	if (net.GetMode() != MultiplayerMode::Chaotix && !spectating) return;
 
 	PacketReader reader(data, len);
 	reader.readType();
 
 	uint16_t event_id = reader.readU16();
 	uint8_t by_decision_key = reader.readU8();
+	int32_t page_id = reader.readI32();
 
 	// If host, relay to other clients
 	if (net.IsHost()) {
 		PacketWriter rpw(PacketType::EventTriggerSync);
 		rpw.write(event_id);
 		rpw.write(by_decision_key);
+		rpw.write(page_id);
 		net.Broadcast(rpw, true);
 	}
 
@@ -1252,11 +1426,20 @@ void MultiplayerState::HandleEventTriggerSync(const uint8_t* data, size_t len) {
 	Game_Event* ev = Game_Map::GetEvent(event_id);
 	if (!ev) return;
 
-	// Don't re-trigger if already running or waiting
-	if (ev->IsWaitingForegroundExecution()) return;
-
-	ev->ScheduleForegroundExecution(by_decision_key != 0, false);
-	Output::Debug("Multiplayer: Remote event trigger applied for event {}", event_id);
+	if (spectating) {
+		// Spectators: push directly into interpreter with the specific page,
+		// bypassing page condition checks that would fail for the spectator
+		auto& interp = Game_Map::GetInterpreter();
+		const lcf::rpg::EventPage* ev_page = (page_id > 0) ? ev->GetPage(page_id) : ev->GetActivePage();
+		if (ev_page && !ev_page->event_commands.empty()) {
+			interp.Push<InterpreterExecutionType::Action>(ev, ev_page);
+		}
+	} else {
+		// Normal sync: schedule via standard mechanism
+		if (ev->IsWaitingForegroundExecution()) return;
+		ev->ScheduleForegroundExecution(by_decision_key != 0, false);
+	}
+	Output::Debug("Multiplayer: Remote event trigger applied for event {} page {}", event_id, page_id);
 }
 
 void MultiplayerState::BroadcastTurnSync(int32_t seed) {
@@ -1668,6 +1851,376 @@ void MultiplayerState::ApplyRubberBandPull() {
 		// Force the player to move toward partner (snap-back)
 		hero->Move(pull_dir);
 	}
+}
+
+// ========== Horror Mode ==========
+
+bool MultiplayerState::IsHorrorMode() const {
+	auto& net = NetManager::Instance();
+	return active && net.IsConnected() && net.GetMode() == MultiplayerMode::Horror;
+}
+
+void MultiplayerState::InitHorrorMode() {
+	// Enable pitch-black darkness with flashlight
+	if (darkness_overlay) {
+		darkness_overlay->SetDarknessLevel(HORROR_DARKNESS_LEVEL);
+		darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+		darkness_overlay->SetEnabled(true);
+	}
+
+	horror_flashlight_on = true;
+	horror_battery_drain_counter = 0;
+	horror_jumpscare_active = false;
+	horror_jumpscare_timer = 0;
+	horror_jumpscare_sprite.reset();
+
+	// Create battery meter HUD
+	if (!horror_battery_window) {
+		horror_battery_window = std::make_unique<Window_Help>(
+			Player::screen_width - 130, 0, 130, 32);
+	}
+	horror_battery_window->SetText(fmt::format("Battery: {}%", horror_battery_percent));
+
+	// Spawn Rawberry enemy (host drives AI, clients get position from sync)
+	auto& net_init = NetManager::Instance();
+	if (net_init.IsHost()) {
+		SpawnRawberry();
+	} else {
+		// Clients create Rawberry for display, but don't spawn yet (position comes from sync)
+		rawberry = std::make_unique<Game_Rawberry>();
+		CreateRawberrySprite();
+	}
+
+	// Play map-based horror music (replaces BGM)
+	horror_last_map_id = -1; // Force music update on first frame
+	horror_overridden_bgm.clear();
+	horror_music_override_delay = 0;
+	ApplyHorrorMusicEffect();
+
+	Output::Debug("Horror: Mode initialized, battery={}%", horror_battery_percent);
+}
+
+void MultiplayerState::CleanupHorrorMode() {
+	horror_battery_percent = 100;
+	horror_flashlight_on = true;
+	horror_battery_drain_counter = 0;
+	horror_battery_window.reset();
+	horror_current_map_music.clear();
+	horror_last_map_id = -1;
+	horror_overridden_bgm.clear();
+	horror_music_override_delay = 0;
+
+	// Clean up jumpscare
+	horror_jumpscare_active = false;
+	horror_jumpscare_timer = 0;
+	horror_jumpscare_sprite.reset();
+
+	// Destroy Rawberry (stops BGS)
+	if (rawberry) {
+		rawberry->StopBGS();
+	}
+	rawberry.reset();
+
+	// Stop horror music and restore the game's BGM
+	if (Main_Data::game_system) {
+		Audio().BGM_Stop();
+		// Re-play the game's current BGM (restores normal music)
+		auto& bgm = Main_Data::game_system->GetCurrentBGM();
+		if (!bgm.name.empty() && bgm.name != "(OFF)") {
+			Main_Data::game_system->BgmPlay(bgm);
+		}
+	}
+}
+
+void MultiplayerState::ApplyHorrorMusicEffect() {
+	int map_id = Game_Map::GetMapId();
+
+	// Determine which horror music to play based on map name
+	std::string map_name{Game_Map::GetMapName(map_id)};
+
+	std::string music_name;
+	if (map_name.find("House") != std::string::npos) {
+		music_name = "HouseBGS";
+	} else if (map_name.find("Flame") != std::string::npos ||
+	           map_name.find("Fire") != std::string::npos ||
+	           map_name.find("Lava") != std::string::npos) {
+		music_name = "FlameBGS";
+	} else {
+		music_name = "OtherBGS";
+	}
+
+	// Don't restart if same track is already set and map hasn't changed
+	if (music_name == horror_current_map_music && map_id == horror_last_map_id) return;
+
+	// Open from assets/MapMusic/ folder
+	auto chaos_fs = FileFinder::ChaosAssets();
+	if (!chaos_fs) {
+		Output::Debug("Horror: ChaosAssets not available for MapMusic");
+		return;
+	}
+
+	DirectoryTree::Args args = { FileFinder::MakePath("MapMusic", music_name), FileFinder::MUSIC_TYPES, 1, false };
+	auto stream = chaos_fs.OpenFile(args);
+	if (!stream) {
+		Output::Debug("Horror: Could not find MapMusic/{}", music_name);
+		return;
+	}
+
+	// Stop whatever is currently on the BGM channel, then play our horror music
+	Audio().BGM_Stop();
+	Audio().BGM_Play(std::move(stream), 100, 100, 0, 50);
+	horror_current_map_music = music_name;
+	horror_last_map_id = map_id;
+
+	// Track the current game BGM so we can detect when the game tries to override us
+	if (Main_Data::game_system) {
+		horror_overridden_bgm = Main_Data::game_system->GetCurrentBGM().name;
+	}
+
+	Output::Debug("Horror: Playing map music '{}' for map '{}' (id={})", music_name, map_name, map_id);
+}
+
+void MultiplayerState::UpdateHorror() {
+	// Handle active jumpscare
+	if (horror_jumpscare_active) {
+		horror_jumpscare_timer--;
+		if (horror_jumpscare_timer <= 0) {
+			// Jumpscare over — enter spectator mode or game over
+			horror_jumpscare_active = false;
+			horror_jumpscare_sprite.reset();
+			if (!ShouldInterceptGameOver()) {
+				Scene::Push(std::make_shared<Scene_Gameover>());
+			}
+		}
+		return; // Don't update anything else during jumpscare
+	}
+
+	// Don't update horror gameplay while spectating (player is dead)
+	if (spectating) return;
+
+	// Switch horror music when entering a different map
+	if (Game_Map::GetMapId() != horror_last_map_id) {
+		horror_current_map_music.clear(); // Force re-play for new map
+		ApplyHorrorMusicEffect();
+	}
+
+	// Detect game trying to change BGM (via events/map transitions) and re-override
+	if (Main_Data::game_system) {
+		auto& bgm = Main_Data::game_system->GetCurrentBGM();
+		if (!bgm.name.empty() && bgm.name != "(OFF)" && bgm.name != horror_overridden_bgm) {
+			horror_overridden_bgm = bgm.name;
+			// Game changed BGM — schedule re-override after async load completes
+			horror_music_override_delay = 5;
+		}
+	}
+	if (horror_music_override_delay > 0) {
+		horror_music_override_delay--;
+		if (horror_music_override_delay == 0) {
+			// Force re-play our horror music over the game's BGM
+			horror_current_map_music.clear();
+			ApplyHorrorMusicEffect();
+		}
+	}
+
+	// Flashlight toggle on key 2
+	if (Input::IsTriggered(Input::N2) && horror_battery_percent > 0) {
+		horror_flashlight_on = !horror_flashlight_on;
+		if (darkness_overlay) {
+			if (horror_flashlight_on) {
+				darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+			} else {
+				darkness_overlay->SetPlayerLight(15);
+			}
+		}
+		Output::Debug("Horror: Flashlight toggled {}", horror_flashlight_on ? "ON" : "OFF");
+	}
+
+	// Drain battery over time (only when flashlight is on)
+	if (horror_battery_percent > 0 && horror_flashlight_on) {
+		horror_battery_drain_counter++;
+		if (horror_battery_drain_counter >= HORROR_BATTERY_DRAIN_INTERVAL) {
+			horror_battery_drain_counter = 0;
+			horror_battery_percent--;
+
+			// Update flashlight radius based on battery
+			if (darkness_overlay) {
+				if (horror_battery_percent > 20) {
+					// Full flashlight
+					darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+				} else if (horror_battery_percent > 0) {
+					// Flickering / shrinking flashlight
+					int reduced_radius = HORROR_FLASHLIGHT_RADIUS * horror_battery_percent / 20;
+					// Add flicker when low
+					if (horror_battery_percent <= 10 && (horror_battery_drain_counter % 30 < 15)) {
+						reduced_radius = reduced_radius / 2;
+					}
+					darkness_overlay->SetPlayerLight(std::max(reduced_radius, 8));
+				}
+			}
+
+			// Update HUD
+			if (horror_battery_window) {
+				horror_battery_window->SetText(fmt::format("Battery: {}%", horror_battery_percent));
+			}
+		}
+	}
+
+	// Flashlight flicker effect when battery is very low (1-10%)
+	if (horror_flashlight_on && horror_battery_percent > 0 && horror_battery_percent <= 10 && darkness_overlay) {
+		// Random flicker
+		int frame_mod = horror_battery_drain_counter % 60;
+		if (frame_mod < 5 || (frame_mod > 20 && frame_mod < 23) || (frame_mod > 45 && frame_mod < 47)) {
+			darkness_overlay->SetPlayerLight(4); // Nearly off
+		} else {
+			int reduced = HORROR_FLASHLIGHT_RADIUS * horror_battery_percent / 20;
+			darkness_overlay->SetPlayerLight(std::max(reduced, 10));
+		}
+	}
+
+	// Battery dead — flashlight off but keep minimal ambient visibility
+	if (horror_battery_percent <= 0 && horror_flashlight_on) {
+		horror_flashlight_on = false;
+		if (darkness_overlay) {
+			darkness_overlay->SetPlayerLight(15);
+		}
+		if (horror_battery_window) {
+			horror_battery_window->SetText("Battery: DEAD");
+		}
+		Output::Debug("Horror: Flashlight died!");
+	}
+
+	// Add flashlight lights for remote players on the same map
+	if (darkness_overlay) {
+		darkness_overlay->ClearFixedLights();
+		for (auto& [id, rp] : remote_players) {
+			if (rp && rp->IsOnCurrentMap()) {
+				darkness_overlay->AddFixedLight(
+					rp->GetScreenX(), rp->GetScreenY() - 8,
+					HORROR_FLASHLIGHT_RADIUS, 255, 255, 245, 220);
+			}
+		}
+	}
+
+	// Update Rawberry enemy (host only runs AI and checks collision)
+	auto& net_horror = NetManager::Instance();
+	if (rawberry) {
+		if (net_horror.IsHost()) {
+			// Host runs full AI
+			if (rawberry->IsSpawned()) {
+				rawberry->UpdateChase();
+
+				// Send Rawberry position to clients periodically
+				rawberry_sync_counter++;
+				if (rawberry_sync_counter >= RAWBERRY_SYNC_INTERVAL) {
+					rawberry_sync_counter = 0;
+					SendRawberrySync();
+				}
+
+				// Only host checks for collision (client position is latency-delayed)
+				if (rawberry->HasCaughtPlayer()) {
+					rawberry->ResetCaught();
+					Output::Debug("Horror: Rawberry ate the player! Triggering jumpscare.");
+
+					// Play scare sound effect
+					auto scare_stream = FileFinder::OpenSound("RawberryScare");
+					if (scare_stream) {
+						auto se_cache = AudioSeCache::Create(std::move(scare_stream), "RawberryScare");
+						if (se_cache) {
+							se_cache->GetSeData();
+							Audio().SE_Play(std::move(se_cache), 100, 100, 50);
+						}
+					}
+
+					// Show jumpscare image fullscreen
+					horror_jumpscare_sprite = std::make_unique<Sprite>();
+					horror_jumpscare_sprite->SetZ(Priority_Maximum);
+					auto img_stream = FileFinder::OpenImage("Picture", "RAWBERRY_SCARE");
+					if (img_stream) {
+						auto bitmap = Bitmap::Create(std::move(img_stream), false);
+						if (bitmap) {
+							horror_jumpscare_sprite->SetBitmap(bitmap);
+							horror_jumpscare_sprite->SetX((Player::screen_width - bitmap->GetWidth()) / 2);
+							horror_jumpscare_sprite->SetY((Player::screen_height - bitmap->GetHeight()) / 2);
+						}
+					}
+
+					// Stop Rawberry BGS and horror music during jumpscare
+					rawberry->StopBGS();
+					Audio().BGM_Stop();
+
+					// Destroy rawberry so it can't re-trigger the jumpscare
+					rawberry.reset();
+
+					horror_jumpscare_active = true;
+					horror_jumpscare_timer = HORROR_JUMPSCARE_DURATION;
+				}
+			}
+		} else {
+			// Client: just update animation and audio (position from sync, no collision check)
+			if (rawberry->IsSpawned()) {
+				rawberry->UpdateDisplay();
+			}
+		}
+	}
+}
+
+void MultiplayerState::SendRawberrySync() {
+	if (!rawberry) return;
+	auto& net = NetManager::Instance();
+	if (!net.IsHost()) return;
+
+	PacketWriter packet(PacketType::RawberrySync);
+	packet.write(static_cast<int32_t>(Game_Map::GetMapId()));
+	packet.write(static_cast<int32_t>(rawberry->GetX()));
+	packet.write(static_cast<int32_t>(rawberry->GetY()));
+	packet.write(static_cast<int32_t>(rawberry->GetDirection()));
+	packet.write(static_cast<uint8_t>(rawberry->IsSpawned() ? 1 : 0));
+	net.Broadcast(packet, false);
+}
+
+void MultiplayerState::HandleRawberrySync(const uint8_t* data, size_t len) {
+	// Don't process during jumpscare or spectating (rawberry was already destroyed locally)
+	if (horror_jumpscare_active || spectating) return;
+
+	PacketReader reader(data, len);
+	reader.readType(); // Skip type byte
+
+	int32_t map_id = reader.readI32();
+	int32_t x = reader.readI32();
+	int32_t y = reader.readI32();
+	int32_t direction = reader.readI32();
+	uint8_t spawned = reader.readU8();
+
+	if (spawned == 0) {
+		// Rawberry was destroyed on host
+		if (rawberry) {
+			rawberry->StopBGS();
+			rawberry.reset();
+		}
+		return;
+	}
+
+	// Only apply if we're on the same map
+	if (Game_Map::GetMapId() != map_id) return;
+
+	// Create Rawberry if it doesn't exist yet
+	if (!rawberry) {
+		rawberry = std::make_unique<Game_Rawberry>();
+		CreateRawberrySprite();
+	}
+
+	rawberry->SetSyncPosition(x, y, direction);
+}
+
+void MultiplayerState::SpawnRawberry() {
+	rawberry = std::make_unique<Game_Rawberry>();
+	rawberry->SpawnFarFromPlayer();
+	CreateRawberrySprite();
+}
+
+void MultiplayerState::CreateRawberrySprite() {
+	if (!current_spriteset || !rawberry) return;
+	current_spriteset->AddCharacterSprite(rawberry.get());
 }
 
 } // namespace Chaos

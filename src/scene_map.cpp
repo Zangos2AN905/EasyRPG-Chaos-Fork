@@ -37,6 +37,7 @@
 #include "input.h"
 #include "game_dynrpg.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/scene_god_mode.h"
 
 using namespace std::chrono_literals;
 
@@ -299,6 +300,14 @@ void Scene_Map::UpdateSceneCalling() {
 	if (call == nullptr) {
 		if (Input::IsTriggered(Input::SETTINGS_MENU)) {
 			call = std::make_shared<Scene_Settings>();
+		}
+	}
+
+	// God Mode: Press 1 to open God Menu (only if local player is god)
+	if (call == nullptr) {
+		auto& mp = Chaos::MultiplayerState::Instance();
+		if (mp.IsActive() && mp.IsLocalGod() && Input::IsTriggered(Input::N1)) {
+			call = std::make_shared<Chaos::Scene_GodMode>();
 		}
 	}
 

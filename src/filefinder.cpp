@@ -62,10 +62,38 @@ namespace {
 	FilesystemView game_fs;
 	FilesystemView save_fs;
 	FilesystemView lang_fs;
+	FilesystemView chaos_assets_fs;
+	bool chaos_assets_initialized = false;
 }
 
 FilesystemView FileFinder::Game() {
 	return game_fs;
+}
+
+FilesystemView FileFinder::ChaosAssets() {
+	if (!chaos_assets_initialized) {
+		chaos_assets_initialized = true;
+#ifdef _WIN32
+		wchar_t exe_path[MAX_PATH];
+		GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+		std::wstring wpath(exe_path);
+		size_t pos = wpath.find_last_of(L"\\/");
+		if (pos != std::wstring::npos) {
+			wpath = wpath.substr(0, pos);
+		}
+		int len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, NULL, 0, NULL, NULL);
+		std::string exe_dir(len - 1, '\0');
+		WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, &exe_dir[0], len, NULL, NULL);
+		std::string assets_path = MakePath(exe_dir, "assets");
+#else
+		std::string assets_path = "assets";
+#endif
+		chaos_assets_fs = Root().Create(assets_path);
+		if (chaos_assets_fs) {
+			Output::Debug("Chaos: Assets directory found at {}", assets_path);
+		}
+	}
+	return chaos_assets_fs;
 }
 
 void FileFinder::SetGameFilesystem(FilesystemView filesystem) {
@@ -300,6 +328,8 @@ bool FileFinder::IsSupportedArchiveExtension(std::string path) {
 }
 
 void FileFinder::Quit() {
+	chaos_assets_fs = {};
+	chaos_assets_initialized = false;
 	root_fs.reset();
 }
 
@@ -480,6 +510,12 @@ Filesystem_Stream::InputStream open_generic(std::string_view dir, std::string_vi
 	}
 
 	auto is = FileFinder::Game().OpenFile(args);
+	if (!is) {
+		auto chaos_fs = FileFinder::ChaosAssets();
+		if (chaos_fs) {
+			is = chaos_fs.OpenFile(args);
+		}
+	}
 	if (!is && Main_Data::filefinder_rtp) {
 		is = Main_Data::filefinder_rtp->Lookup(dir, name, args.exts);
 		if (!is) {

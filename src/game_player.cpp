@@ -492,8 +492,15 @@ bool Game_Player::CheckEventTriggerThere(TriggerSet triggers, int x, int y, bool
 
 void Game_Player::ResetGraphic() {
 
-	// In multiplayer team mode, use the actor assigned to this player's peer_id
+	// Don't reset graphic while spectating (player should remain invisible)
 	auto& mp = Chaos::MultiplayerState::Instance();
+	if (mp.IsSpectating()) {
+		SetSpriteGraphic("", 0);
+		SetTransparency(7);
+		return;
+	}
+
+	// In multiplayer team mode, use the actor assigned to this player's peer_id
 	auto& net = Chaos::NetManager::Instance();
 	if (mp.IsActive()) {
 		auto mode = net.GetMode();

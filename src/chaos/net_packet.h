@@ -34,7 +34,8 @@ enum class PacketType : uint8_t {
 	ChatMessage,      // Bidirectional: chat message
 
 	// God Mode specific
-	GodCommand,       // God -> Server: control command (set level, modify event, etc.)
+	GodCommand,       // God -> All: control command (set switch, variable, teleport, stats, etc.)
+	GodAssign,        // Server -> All: assign the god player (peer_id)
 
 	// Host map ready
 	HostMapReady,     // Server -> All: host entered a map (map_id, x, y)
@@ -63,6 +64,9 @@ enum class PacketType : uint8_t {
 
 	// Event trigger sync (chaotix)
 	EventTriggerSync, // Player -> All: event was triggered by a player
+
+	// Horror mode sync
+	RawberrySync,     // Host -> All: Rawberry enemy position (horror mode)
 };
 
 // Simple packet buffer for serialization

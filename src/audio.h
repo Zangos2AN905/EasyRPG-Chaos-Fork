@@ -130,6 +130,36 @@ struct AudioInterface {
 	virtual std::string BGM_GetType() const = 0;
 
 	/**
+	 * Plays a background sound (BGS) on a dedicated looping channel.
+	 * Used for ambient/positional audio that loops independently of BGM.
+	 *
+	 * @param stream file to play.
+	 * @param volume volume.
+	 * @param pitch pitch.
+	 * @param balance balance (0 - 100)
+	 */
+	virtual void BGS_Play(Filesystem_Stream::InputStream stream, int volume, int pitch, int balance) = 0;
+
+	/**
+	 * Stops the currently playing background sound.
+	 */
+	virtual void BGS_Stop() = 0;
+
+	/**
+	 * Adjusts the volume of the background sound.
+	 *
+	 * @param volume volume
+	 */
+	virtual void BGS_Volume(int volume) = 0;
+
+	/**
+	 * Adjusts the balance of the background sound.
+	 *
+	 * @param balance balance (0 - 100)
+	 */
+	virtual void BGS_Balance(int balance) = 0;
+
+	/**
 	 * Plays a sound effect.
 	 *
 	 * @param se se to play.
@@ -181,6 +211,10 @@ public:
 	void BGM_Pitch(int) override {};
 	void BGM_Balance(int) override {}
 	std::string BGM_GetType() const override { return {}; };
+	void BGS_Play(Filesystem_Stream::InputStream, int, int, int) override {}
+	void BGS_Stop() override {}
+	void BGS_Volume(int) override {}
+	void BGS_Balance(int) override {}
 	void SE_Play(std::unique_ptr<AudioSeCache>, int, int, int) override {}
 	void SE_Stop() override {}
 	void Update() override {}

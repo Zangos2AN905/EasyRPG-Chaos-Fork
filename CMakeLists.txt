@@ -505,6 +505,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/relay_connection.h
 	src/chaos/game_multiplayer.cpp
 	src/chaos/game_multiplayer.h
+	src/chaos/game_rawberry.cpp
+	src/chaos/game_rawberry.h
 	src/chaos/multiplayer_state.cpp
 	src/chaos/multiplayer_state.h
 	src/chaos/drawable_rubber_band.cpp
@@ -517,6 +519,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/scene_multiplayer_lobby.h
 	src/chaos/scene_multiplayer_wait.cpp
 	src/chaos/scene_multiplayer_wait.h
+	src/chaos/scene_god_mode.cpp
+	src/chaos/scene_god_mode.h
 )
 
 # These are actually unused when building in CMake

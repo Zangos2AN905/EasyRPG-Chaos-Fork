@@ -776,6 +776,11 @@ void Scene_MultiplayerLobby::StartGame() {
 	// Start multiplayer state manager
 	MultiplayerState::Instance().StartMultiplayer();
 
+	// If God Mode, randomly assign a god player and broadcast
+	if (net.GetMode() == MultiplayerMode::GodMode) {
+		MultiplayerState::Instance().AssignRandomGod();
+	}
+
 	// Pop this lobby and proceed to logo/title
 	auto logos = Scene_Logo::LoadLogos();
 	if (!logos.empty()) {

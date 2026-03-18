@@ -30,6 +30,9 @@ GenericAudio::GenericAudio(const Game_ConfigAudio& cfg) : AudioInterface(cfg) {
 		BGM_Channel.decoder.reset();
 		BGM_Channel.instance = this;
 	}
+	bgs_channel.id = 99;
+	bgs_channel.decoder.reset();
+	bgs_channel.instance = this;
 	i = 0;
 	for (auto& SE_Channel : SE_Channels) {
 		SE_Channel.id = i++;
@@ -199,6 +202,35 @@ void GenericAudio::SE_Play(std::unique_ptr<AudioSeCache> se, int volume, int pit
 void GenericAudio::SE_Stop() {
 	for (auto& SE_Channel : SE_Channels) {
 		SE_Channel.stopped = true; //Stop all running sound effects
+	}
+}
+
+void GenericAudio::BGS_Play(Filesystem_Stream::InputStream stream, int volume, int pitch, int balance) {
+	if (!stream) {
+		Output::Warning("Couldn't play BGS {}: File not readable", stream.GetName());
+		return;
+	}
+	bgs_channel.stopped = true;
+	LockMutex();
+	PlayOnChannel(bgs_channel, std::move(stream), volume, pitch, 0, balance);
+	UnlockMutex();
+}
+
+void GenericAudio::BGS_Stop() {
+	LockMutex();
+	bgs_channel.Stop();
+	UnlockMutex();
+}
+
+void GenericAudio::BGS_Volume(int volume) {
+	if (bgs_channel.IsUsed()) {
+		bgs_channel.SetVolume(volume);
+	}
+}
+
+void GenericAudio::BGS_Balance(int balance) {
+	if (bgs_channel.IsUsed()) {
+		bgs_channel.SetBalance(balance);
 	}
 }
 
@@ -469,6 +501,76 @@ void GenericAudio::Decode(uint8_t* output_buffer, int buffer_length) {
 
 			}
 			channel_active = true;
+		}
+	}
+
+	// Mix BGS channel (separate from BGM/SE loop so BGM_Stop doesn't affect it)
+	if (bgs_channel.decoder && !bgs_channel.paused) {
+		if (bgs_channel.stopped) {
+			bgs_channel.decoder.reset();
+		} else {
+			float current_master_volume = cfg.music_volume.Get() / 100.0f;
+			StereoVolume volume = bgs_channel.decoder->GetVolume();
+			float vleft = volume.left_volume / 100.0f * current_master_volume;
+			float vright = volume.right_volume / 100.0f * current_master_volume;
+			int frequency = 0;
+			int channels = 0;
+			AudioDecoder::Format sampleformat;
+			bgs_channel.decoder->GetFormat(frequency, sampleformat, channels);
+			bgs_channel.decoder->Update(std::chrono::milliseconds(samples_per_frame * 1000 / frequency));
+			int samplesize = AudioDecoder::GetSamplesizeForFormat(sampleformat);
+			total_volume += std::max(vleft, vright);
+
+			unsigned bytes_to_read = (samplesize * channels * samples_per_frame);
+			bytes_to_read = (bytes_to_read < scrap_buffer_size) ? bytes_to_read : scrap_buffer_size;
+
+			int read_bytes = bgs_channel.decoder->Decode(scrap_buffer.data(), bytes_to_read);
+			if (read_bytes > 0) {
+				for (unsigned ii = 0; ii < (unsigned)(read_bytes / (samplesize * channels)); ii++) {
+					float vall = vleft;
+					float valr = vright;
+					switch (sampleformat) {
+						case AudioDecoder::Format::S8:
+							vall *= (((int8_t*)scrap_buffer.data())[ii * channels] / 128.0);
+							valr *= (channels > 1) ? (((int8_t*)scrap_buffer.data())[ii * channels + 1] / 128.0) : vall;
+							break;
+						case AudioDecoder::Format::U8:
+							vall *= (((uint8_t*)scrap_buffer.data())[ii * channels] / 128.0 - 1.0);
+							valr *= (channels > 1) ? (((uint8_t*)scrap_buffer.data())[ii * channels + 1] / 128.0 - 1.0) : vall;
+							break;
+						case AudioDecoder::Format::S16:
+							vall *= (((int16_t*)scrap_buffer.data())[ii * channels] / 32768.0);
+							valr *= (channels > 1) ? (((int16_t*)scrap_buffer.data())[ii * channels + 1] / 32768.0) : vall;
+							break;
+						case AudioDecoder::Format::U16:
+							vall *= (((uint16_t*)scrap_buffer.data())[ii * channels] / 32768.0 - 1.0);
+							valr *= (channels > 1) ? (((uint16_t*)scrap_buffer.data())[ii * channels + 1] / 32768.0 - 1.0) : vall;
+							break;
+						case AudioDecoder::Format::S32:
+							vall *= (((int32_t*)scrap_buffer.data())[ii * channels] / 2147483648.0);
+							valr *= (channels > 1) ? (((int32_t*)scrap_buffer.data())[ii * channels + 1] / 2147483648.0) : vall;
+							break;
+						case AudioDecoder::Format::U32:
+							vall *= (((uint32_t*)scrap_buffer.data())[ii * channels] / 2147483648.0 - 1.0);
+							valr *= (channels > 1) ? (((uint32_t*)scrap_buffer.data())[ii * channels + 1] / 2147483648.0 - 1.0) : vall;
+							break;
+						case AudioDecoder::Format::F32:
+							vall *= (((float*)scrap_buffer.data())[ii * channels]);
+							valr *= (channels > 1) ? (((float*)scrap_buffer.data())[ii * channels + 1]) : vall;
+							break;
+					}
+					if (!channel_active) {
+						mixer_buffer[ii * output_format.channels] = vall;
+						mixer_buffer[ii * output_format.channels + 1] = (channels > 1) ? valr : vall;
+					} else {
+						mixer_buffer[ii * output_format.channels] += vall;
+						mixer_buffer[ii * output_format.channels + 1] += (channels > 1) ? valr : vall;
+					}
+				}
+				channel_active = true;
+			} else {
+				bgs_channel.decoder.reset();
+			}
 		}
 	}
 

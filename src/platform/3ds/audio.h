@@ -47,6 +47,10 @@ public:
 	std::string BGM_GetType() const override;
 	void SE_Play(std::unique_ptr<AudioSeCache> se, int volume, int pitch, int balance) override;
 	void SE_Stop() override;
+	void BGS_Play(Filesystem_Stream::InputStream, int, int, int) override {}
+	void BGS_Stop() override {}
+	void BGS_Volume(int) override {}
+	void BGS_Balance(int) override {}
 	void Update() override;
 
 	void vGetConfig(Game_ConfigAudio&) const override {}
