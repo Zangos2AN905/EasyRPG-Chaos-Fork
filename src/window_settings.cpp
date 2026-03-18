@@ -43,6 +43,7 @@
 #include "chaos/ai_characters.h"
 #include "chaos/scene_ai_characters.h"
 #include "chaos/discord_integration.h"
+#include "chaos/multiplayer_state.h"
 
 class MenuItem final : public ConfigParam<std::string_view> {
 public:
@@ -644,6 +645,60 @@ void Window_Settings::RefreshChaos() {
 		opt.action = [this]() {
 			Chaos::DiscordIntegration::SetEnabled(!Chaos::DiscordIntegration::IsEnabled());
 			Refresh();
+		};
+		GetFrame().options.push_back(std::move(opt));
+	}
+
+	// Realtime Lighting toggle
+	{
+		auto& mp = Chaos::MultiplayerState::Instance();
+		Option opt;
+		opt.text = "Realtime Lighting";
+		opt.help = "Enable dynamic darkness overlay with light sources around the player";
+		opt.value_text = mp.IsLightingEnabled() ? "[ON]" : "[OFF]";
+		opt.mode = eOptionNone;
+		opt.action = [this]() {
+			auto& m = Chaos::MultiplayerState::Instance();
+			m.SetLightingEnabled(!m.IsLightingEnabled());
+			Refresh();
+		};
+		GetFrame().options.push_back(std::move(opt));
+	}
+
+	// Darkness Level (only when lighting is enabled)
+	if (Chaos::MultiplayerState::Instance().IsLightingEnabled()) {
+		auto& mp = Chaos::MultiplayerState::Instance();
+		Option opt;
+		opt.text = "  Darkness Level";
+		opt.help = "How dark the overlay is (0 = transparent, 255 = pitch black)";
+		opt.mode = eOptionRangeInput;
+		opt.current_value = mp.GetLightingDarknessLevel();
+		opt.original_value = 180;
+		opt.min_value = 0;
+		opt.max_value = 255;
+		opt.value_text = "[" + std::to_string(mp.GetLightingDarknessLevel()) + "]";
+		opt.action = [this]() {
+			Chaos::MultiplayerState::Instance().SetLightingDarknessLevel(
+				static_cast<uint8_t>(GetCurrentOption().current_value));
+		};
+		GetFrame().options.push_back(std::move(opt));
+	}
+
+	// Player Light Radius (only when lighting is enabled)
+	if (Chaos::MultiplayerState::Instance().IsLightingEnabled()) {
+		auto& mp = Chaos::MultiplayerState::Instance();
+		Option opt;
+		opt.text = "  Player Light Radius";
+		opt.help = "Size of light around the player in pixels";
+		opt.mode = eOptionRangeInput;
+		opt.current_value = mp.GetLightingPlayerRadius();
+		opt.original_value = 80;
+		opt.min_value = 16;
+		opt.max_value = 256;
+		opt.value_text = "[" + std::to_string(mp.GetLightingPlayerRadius()) + "]";
+		opt.action = [this]() {
+			Chaos::MultiplayerState::Instance().SetLightingPlayerRadius(
+				GetCurrentOption().current_value);
 		};
 		GetFrame().options.push_back(std::move(opt));
 	}

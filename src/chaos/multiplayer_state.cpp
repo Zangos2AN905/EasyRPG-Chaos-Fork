@@ -62,6 +62,7 @@ void MultiplayerState::StopMultiplayer() {
 	last_actor_states.clear();
 	actor_state_sync_counter = 0;
 	DestroyRubberBandDrawable();
+	darkness_overlay.reset();
 	battle_invite_window.reset();
 	remote_battle_actions.clear();
 	remote_players.clear();
@@ -116,9 +117,18 @@ void MultiplayerState::Update() {
 	}
 
 	// Update remote player characters (movement animation, stepping)
+	// Collect IDs first to avoid iterator invalidation if a callback removes a player
+	std::vector<uint16_t> update_ids;
+	update_ids.reserve(remote_players.size());
 	for (auto& [id, rp] : remote_players) {
-		if (rp->IsOnCurrentMap()) {
-			rp->UpdateRemote();
+		if (rp && rp->IsOnCurrentMap()) {
+			update_ids.push_back(id);
+		}
+	}
+	for (auto id : update_ids) {
+		auto it = remote_players.find(id);
+		if (it != remote_players.end() && it->second) {
+			it->second->UpdateRemote();
 		}
 	}
 
@@ -182,6 +192,11 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 	if (net.IsConnected() && GetModeProperties(net.GetMode()).proximity_required) {
 		CreateRubberBandDrawable();
 	}
+
+	// Create darkness/lighting overlay (available in all modes, including singleplayer)
+	if (!darkness_overlay) {
+		darkness_overlay = std::make_unique<Drawable_DarknessOverlay>();
+	}
 	if (net.IsHost() && net.IsConnected()) {
 		auto* hero = Main_Data::game_player.get();
 		if (hero) {
@@ -196,15 +211,19 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 
 			// Send party actor IDs and levels
 			auto actors = Main_Data::game_party->GetActors();
-			pw.write(static_cast<uint16_t>(actors.size()));
+			// Count non-null actors first
+			uint16_t actor_count = 0;
+			for (auto* a : actors) { if (a) actor_count++; }
+			pw.write(actor_count);
 			for (auto* actor : actors) {
+				if (!actor) continue;
 				pw.write(static_cast<uint16_t>(actor->GetId()));
 				pw.write(static_cast<int32_t>(actor->GetLevel()));
 			}
 
 			net.Broadcast(pw, true);
 			Output::Debug("Multiplayer: Host sent HostMapReady map={} x={} y={} actors={}",
-				map_id, x, y, actors.size());
+				map_id, x, y, actor_count);
 
 			// Send bulk switch data
 			if (Main_Data::game_switches) {
@@ -243,6 +262,13 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 
 void MultiplayerState::OnMapUnloaded() {
 	DestroyRubberBandDrawable();
+	// Save lighting settings before destroying overlay
+	if (darkness_overlay) {
+		lighting_enabled = darkness_overlay->IsEnabled();
+		lighting_darkness_level = darkness_overlay->GetDarknessLevel();
+		lighting_player_radius = darkness_overlay->GetPlayerLightRadius();
+	}
+	darkness_overlay.reset();
 	current_spriteset = nullptr;
 }
 
@@ -287,8 +313,11 @@ void MultiplayerState::OnPlayerConnected(uint16_t peer_id) {
 			pw.write(static_cast<int32_t>(y));
 
 			auto actors = Main_Data::game_party->GetActors();
-			pw.write(static_cast<uint16_t>(actors.size()));
+			uint16_t actor_count = 0;
+			for (auto* a : actors) { if (a) actor_count++; }
+			pw.write(actor_count);
 			for (auto* actor : actors) {
+				if (!actor) continue;
 				pw.write(static_cast<uint16_t>(actor->GetId()));
 				pw.write(static_cast<int32_t>(actor->GetLevel()));
 			}
@@ -905,6 +934,9 @@ void MultiplayerState::HandleBattleForce(const uint8_t* data, size_t len) {
 	// Don't force if we're already in battle
 	if (in_battle) return;
 
+	// Don't overwrite a pending forced battle
+	if (forced_battle) return;
+
 	battle_troop_id = troop_id;
 	battle_terrain_id = terrain_id;
 	battle_first_strike = first_strike != 0;
@@ -1327,8 +1359,8 @@ void MultiplayerState::HandleMapChangeForce(const uint8_t* data, size_t len) {
 	int32_t x = reader.readI32();
 	int32_t y = reader.readI32();
 
-	// Don't force if we're already on that map or a force is pending
-	if (Game_Map::GetMapId() == map_id || forced_map_change) return;
+	// Don't force if we're already on that map or a force is pending, or invalid map
+	if (map_id <= 0 || Game_Map::GetMapId() == map_id || forced_map_change) return;
 
 	forced_map_change = true;
 	forced_map_id = map_id;
@@ -1349,9 +1381,8 @@ void MultiplayerState::ConsumeForcedMapChange() {
 	// Don't teleport while a cutscene/event is running — defer until it finishes
 	if (Game_Map::GetInterpreter().IsRunning()) return;
 
-	forced_map_change = false;
-
 	if (Main_Data::game_player && !Main_Data::game_player->IsPendingTeleport()) {
+		forced_map_change = false;
 		Main_Data::game_player->ReserveTeleport(
 			forced_map_id, forced_map_x, forced_map_y, -1,
 			TeleportTarget::eParallelTeleport);
@@ -1365,6 +1396,7 @@ void MultiplayerState::CheckAndSyncActorStates() {
 	auto actors = Main_Data::game_party->GetActors();
 
 	for (auto* actor : actors) {
+		if (!actor) continue;
 		int id = actor->GetId();
 		int hp = actor->GetHp();
 		int sp = actor->GetSp();
@@ -1425,6 +1457,13 @@ void MultiplayerState::HandleActorStateSync(const uint8_t* data, size_t len) {
 	auto& actor_states = actor->GetStates();
 	actor_states = states;
 
+	// Ensure death state consistency: if HP is 0, add death state; if HP > 0, remove it
+	if (hp <= 0 && !actor->IsDead()) {
+		actor->Kill();
+	} else if (hp > 0 && actor->IsDead()) {
+		actor->RemoveState(1, false); // State 1 is death/KO
+	}
+
 	Output::Debug("Multiplayer: Synced actor {} state: hp={} sp={} states={}", actor_id, hp, sp, state_count);
 }
 
@@ -1436,6 +1475,37 @@ void MultiplayerState::CreateRubberBandDrawable() {
 
 void MultiplayerState::DestroyRubberBandDrawable() {
 	rubber_band.reset();
+}
+
+void MultiplayerState::EnsureDarknessOverlay() {
+	if (!darkness_overlay) {
+		darkness_overlay = std::make_unique<Drawable_DarknessOverlay>();
+		// Restore persistent settings
+		darkness_overlay->SetEnabled(lighting_enabled);
+		darkness_overlay->SetDarknessLevel(lighting_darkness_level);
+		darkness_overlay->SetPlayerLight(lighting_player_radius);
+	}
+}
+
+void MultiplayerState::SetLightingEnabled(bool v) {
+	lighting_enabled = v;
+	if (darkness_overlay) {
+		darkness_overlay->SetEnabled(v);
+	}
+}
+
+void MultiplayerState::SetLightingDarknessLevel(uint8_t v) {
+	lighting_darkness_level = v;
+	if (darkness_overlay) {
+		darkness_overlay->SetDarknessLevel(v);
+	}
+}
+
+void MultiplayerState::SetLightingPlayerRadius(int v) {
+	lighting_player_radius = v;
+	if (darkness_overlay) {
+		darkness_overlay->SetPlayerLight(v);
+	}
 }
 
 void MultiplayerState::UpdateRubberBand() {

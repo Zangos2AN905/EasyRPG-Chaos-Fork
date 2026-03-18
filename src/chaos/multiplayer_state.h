@@ -12,6 +12,7 @@
 #include "chaos/multiplayer_mode.h"
 #include "chaos/game_multiplayer.h"
 #include "chaos/drawable_rubber_band.h"
+#include "chaos/drawable_darkness_overlay.h"
 
 class Game_Actor;
 class Spriteset_Map;
@@ -115,6 +116,20 @@ public:
 
 	/** Chaotix event trigger sync - called when local player triggers an event */
 	void OnEventTriggered(int event_id, bool by_decision_key);
+
+	/** Darkness/lighting overlay - accessible for game-driven configuration */
+	Drawable_DarknessOverlay* GetDarknessOverlay() { return darkness_overlay.get(); }
+
+	/** Ensure the darkness overlay exists (called from Spriteset_Map even in singleplayer) */
+	void EnsureDarknessOverlay();
+
+	/** Persistent lighting settings (work even when overlay doesn't exist yet) */
+	bool IsLightingEnabled() const { return lighting_enabled; }
+	void SetLightingEnabled(bool v);
+	uint8_t GetLightingDarknessLevel() const { return lighting_darkness_level; }
+	void SetLightingDarknessLevel(uint8_t v);
+	int GetLightingPlayerRadius() const { return lighting_player_radius; }
+	void SetLightingPlayerRadius(int v);
 
 private:
 	MultiplayerState() = default;
@@ -233,6 +248,14 @@ private:
 	std::unique_ptr<Drawable_RubberBand> rubber_band;
 	static constexpr int RUBBER_BAND_RANGE = 5;  // tiles before band starts stretching
 	static constexpr int RUBBER_BAND_MAX = 8;    // tiles max distance (blocks movement)
+
+	// Darkness/lighting overlay
+	std::unique_ptr<Drawable_DarknessOverlay> darkness_overlay;
+
+	// Persistent lighting settings (survive overlay recreation across map changes)
+	bool lighting_enabled = false;
+	uint8_t lighting_darkness_level = 180;
+	int lighting_player_radius = 80;
 };
 
 } // namespace Chaos

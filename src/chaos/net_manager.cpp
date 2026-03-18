@@ -204,6 +204,9 @@ void NetManager::Update() {
 			}
 			is_host = false;
 			is_client = false;
+			game_started = false;
+			host_map_ready = false;
+			local_peer_id = 0;
 			peers.clear();
 			if (disconnect_callback) {
 				disconnect_callback(0);

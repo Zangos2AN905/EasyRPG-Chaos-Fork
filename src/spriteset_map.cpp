@@ -80,6 +80,8 @@ void Spriteset_Map::Refresh() {
 
 	// Chaos Fork: Add remote player sprites for multiplayer
 	auto& mp = Chaos::MultiplayerState::Instance();
+	// Always create the darkness overlay (works in singleplayer too)
+	mp.EnsureDarknessOverlay();
 	if (mp.IsActive()) {
 		mp.OnMapLoaded(this);
 		for (auto& [id, rp] : mp.GetRemotePlayers()) {

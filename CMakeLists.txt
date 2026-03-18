@@ -509,6 +509,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/multiplayer_state.h
 	src/chaos/drawable_rubber_band.cpp
 	src/chaos/drawable_rubber_band.h
+	src/chaos/drawable_darkness_overlay.cpp
+	src/chaos/drawable_darkness_overlay.h
 	src/chaos/scene_multiplayer_menu.cpp
 	src/chaos/scene_multiplayer_menu.h
 	src/chaos/scene_multiplayer_lobby.cpp
