@@ -13,6 +13,7 @@
 #include "chaos/relay_connection.h"
 #include <memory>
 #include <string>
+#include <filesystem>
 
 namespace Chaos {
 
@@ -32,6 +33,7 @@ private:
 		RelayModeSelect, // Relay host: choose game mode
 		RelayWaiting,    // Relay: waiting for room code or join result
 		ServerBrowser,   // Browse online servers
+		Downloading,     // Downloading game files from host
 		Waiting,         // Connected, waiting to start / waiting for host
 	};
 
@@ -43,6 +45,7 @@ private:
 	void UpdateRelayModeSelect();
 	void UpdateRelayWaiting();
 	void UpdateServerBrowser();
+	void UpdateDownloading();
 	void UpdateWaiting();
 
 	void StartHosting();
@@ -52,6 +55,15 @@ private:
 	void ClientStartGame();
 	void RefreshPlayerList();
 	void RefreshServerList();
+
+	/** Check if host's game is available locally and switch to it if found. */
+	bool IsHostGameAvailable();
+
+	/** Switch the game filesystem to a local game directory. */
+	void SwitchToHostGame(const std::string& game_path);
+
+	/** Get executable directory for game lookup. */
+	std::string GetExeDirectory();
 
 	LobbyState state = LobbyState::NameEntry;
 
@@ -83,6 +95,10 @@ private:
 	std::vector<std::string> browser_game_names;
 	bool browser_fetching = false;
 	int browser_refresh_timer = 0;
+
+	// Download state
+	int download_timer = 0;
+	bool game_check_done = false;
 };
 
 } // namespace Chaos

@@ -7,6 +7,7 @@
 #include "chaos/multiplayer_mode.h"
 #include "chaos/multiplayer_state.h"
 #include "chaos/discord_integration.h"
+#include "chaos/game_file_transfer.h"
 #include "input.h"
 #include "player.h"
 #include "scene.h"
@@ -16,9 +17,15 @@
 #include "main_data.h"
 #include "game_clock.h"
 #include "output.h"
+#include "filefinder.h"
 #include "chaos/scene_multiplayer_wait.h"
 #include <fmt/format.h>
 #include <algorithm>
+#include <filesystem>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace Chaos {
 
@@ -200,6 +207,9 @@ void Scene_MultiplayerLobby::vUpdate() {
 			break;
 		case LobbyState::ServerBrowser:
 			UpdateServerBrowser();
+			break;
+		case LobbyState::Downloading:
+			UpdateDownloading();
 			break;
 		case LobbyState::Waiting:
 			UpdateWaiting();
@@ -491,6 +501,20 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 		} else if (net.GetLocalPeerId() == 0) {
 			status_window->SetText(fmt::format("Connecting... ({}s)", connect_timer / 60));
 		} else {
+			// Got peer_id - check game on first frame
+			if (!game_check_done) {
+				game_check_done = true;
+				if (!IsHostGameAvailable()) {
+					Output::Debug("Multiplayer: Host game '{}' not found locally, starting download",
+						net.GetHostGameName());
+					net.RequestGameFiles();
+					state = LobbyState::Downloading;
+					download_timer = 0;
+					status_window->SetText(fmt::format("Downloading {}...", net.GetHostGameName()));
+					help_window->SetText("Game not found locally - downloading from host");
+					return;
+				}
+			}
 			status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
 				net.GetLocalPlayerName()));
 		}
@@ -622,10 +646,21 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 	} else {
 		// Client waiting for join result
 		if (net.GetLocalPeerId() != 0) {
-			// Got JoinAccept via relay, transition to normal waiting
-			state = LobbyState::Waiting;
-			status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
-				net.GetLocalPlayerName()));
+			// Got JoinAccept via relay - check if host's game is available
+			if (!IsHostGameAvailable()) {
+				// Need to download
+				Output::Debug("Multiplayer: Host game '{}' not found locally, starting download",
+					net.GetHostGameName());
+				net.RequestGameFiles();
+				state = LobbyState::Downloading;
+				download_timer = 0;
+				status_window->SetText(fmt::format("Downloading {}...", net.GetHostGameName()));
+				help_window->SetText("Game not found locally - downloading from host");
+			} else {
+				state = LobbyState::Waiting;
+				status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
+					net.GetLocalPlayerName()));
+			}
 		} else if (!net.IsClient()) {
 			// Join failed or disconnected
 			status_window->SetText("Connection failed");
@@ -803,6 +838,145 @@ void Scene_MultiplayerLobby::ClientStartGame() {
 
 	// Client goes to a waiting screen instead of title screen
 	Scene::Push(std::make_shared<Scene_MultiplayerWait>(), true);
+}
+
+std::string Scene_MultiplayerLobby::GetExeDirectory() {
+#ifdef _WIN32
+	wchar_t exe_path[MAX_PATH];
+	GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+	std::wstring wpath(exe_path);
+	size_t pos = wpath.find_last_of(L"\\/");
+	if (pos != std::wstring::npos) {
+		wpath = wpath.substr(0, pos);
+	}
+	int len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, NULL, 0, NULL, NULL);
+	std::string result;
+	result.resize(len - 1);
+	WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, &result[0], len, NULL, NULL);
+	return result;
+#else
+	return ".";
+#endif
+}
+
+bool Scene_MultiplayerLobby::IsHostGameAvailable() {
+	auto& net = NetManager::Instance();
+	std::string host_game = net.GetHostGameName();
+
+	if (host_game.empty() || host_game == "Unknown Game") {
+		return true;
+	}
+
+	// Check if the local game title matches
+	if (!Player::game_title.empty() && Player::game_title == host_game) {
+		return true;
+	}
+
+	// Sanitize game name for directory lookup
+	std::string safe_name = host_game;
+	for (char& c : safe_name) {
+		if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+			c = '_';
+		}
+	}
+
+	std::string game_path = GetExeDirectory() + "/" + safe_name;
+	std::error_code ec;
+	if (std::filesystem::is_directory(game_path, ec)) {
+		SwitchToHostGame(game_path);
+		return true;
+	}
+
+	return false;
+}
+
+void Scene_MultiplayerLobby::SwitchToHostGame(const std::string& game_path) {
+	Output::Debug("Multiplayer: Switching to host's game at {}", game_path);
+
+	auto fs = FileFinder::Root().Create(game_path);
+	if (fs) {
+		FileFinder::SetGameFilesystem(fs);
+		Player::CreateGameObjects();
+		Output::Debug("Multiplayer: Game objects created for host's game");
+	} else {
+		Output::Warning("Multiplayer: Failed to create filesystem for {}", game_path);
+	}
+}
+
+void Scene_MultiplayerLobby::UpdateDownloading() {
+	auto& net = NetManager::Instance();
+	net.Update();
+
+	download_timer++;
+
+	if (Input::IsTriggered(Input::CANCEL)) {
+		Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Cancel));
+		net.Disconnect();
+		connected = false;
+		state = LobbyState::HostOrJoin;
+		status_window->SetVisible(false);
+		playerlist_window->SetVisible(false);
+		start_window->SetVisible(false);
+		hostjoin_window->SetVisible(true);
+		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
+		DiscordIntegration::ClearMultiplayerPresence();
+		game_check_done = false;
+		return;
+	}
+
+	auto* transfer = net.GetClientTransfer();
+	if (!transfer) {
+		// Transfer object not created yet or lost
+		std::string dots;
+		int n = (download_timer / 30) % 4;
+		for (int i = 0; i < n; ++i) dots += '.';
+		status_window->SetText(fmt::format("Requesting game files{}", dots));
+		return;
+	}
+
+	if (transfer->HasError()) {
+		status_window->SetText(fmt::format("Download failed: {}", transfer->GetError()));
+		help_window->SetText("Press Cancel to go back");
+		return;
+	}
+
+	if (transfer->IsComplete()) {
+		// Determine downloaded game path
+		std::string safe_name = net.GetHostGameName();
+		for (char& c : safe_name) {
+			if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+				c = '_';
+			}
+		}
+		if (safe_name.empty()) safe_name = "DownloadedGame";
+
+		std::string game_path = GetExeDirectory() + "/" + safe_name;
+		SwitchToHostGame(game_path);
+
+		// Move to waiting lobby
+		state = LobbyState::Waiting;
+		status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
+			net.GetLocalPlayerName()));
+		help_window->SetText("Download complete! Waiting for host to start the game");
+		Output::Debug("Multiplayer: Download complete, switched to host's game");
+		return;
+	}
+
+	// Show progress
+	int pct = transfer->GetProgressPercent();
+	uint16_t files_done = transfer->GetReceivedFiles();
+	uint16_t files_total = transfer->GetTotalFiles();
+	if (pct > 0) {
+		status_window->SetText(fmt::format("Downloading {}... {}% ({}/{})",
+			net.GetHostGameName(), pct, files_done, files_total));
+	} else if (transfer->IsInfoReceived()) {
+		status_window->SetText(fmt::format("Downloading {}... preparing", net.GetHostGameName()));
+	} else {
+		std::string dots;
+		int n = (download_timer / 30) % 4;
+		for (int i = 0; i < n; ++i) dots += '.';
+		status_window->SetText(fmt::format("Requesting game files{}", dots));
+	}
 }
 
 void Scene_MultiplayerLobby::RefreshPlayerList() {
