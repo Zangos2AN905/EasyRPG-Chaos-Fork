@@ -132,6 +132,12 @@ public:
 	void ApplyHorrorMusicEffect();
 	Game_Rawberry* GetRawberry() { return rawberry.get(); }
 
+	/** ASYM Mode - asymmetric horror: one player is the hunter */
+	bool IsAsymMode() const;
+	bool IsLocalHunter() const { return asym_is_local_hunter; }
+	uint16_t GetHunterPlayerId() const { return asym_hunter_id; }
+	void AssignRandomHunter();
+
 	/** Darkness/lighting overlay - accessible for game-driven configuration */
 	Drawable_DarknessOverlay* GetDarknessOverlay() { return darkness_overlay.get(); }
 
@@ -174,6 +180,8 @@ private:
 	void HandleActorStateSync(const uint8_t* data, size_t len);
 	void HandleEventTriggerSync(const uint8_t* data, size_t len);
 	void HandleRawberrySync(const uint8_t* data, size_t len);
+	void HandleAsymHunterAssign(const uint8_t* data, size_t len);
+	void HandleAsymKill(const uint8_t* data, size_t len);
 
 	// Sync functions
 	void SendLocalPlayerPosition();
@@ -203,6 +211,12 @@ private:
 	void CleanupHorrorMode();
 	void SpawnRawberry();
 	void CreateRawberrySprite();
+
+	// ASYM mode
+	void UpdateAsym();
+	void InitAsymMode();
+	void CleanupAsymMode();
+	void AsymCheckHunterCollision();
 
 	bool active = false;
 	bool host_lost = false;
@@ -301,6 +315,11 @@ private:
 
 	// Rawberry enemy
 	std::unique_ptr<Game_Rawberry> rawberry;
+
+	// ASYM mode state
+	bool asym_is_local_hunter = false;
+	uint16_t asym_hunter_id = 0;
+	bool asym_initialized = false;
 
 	// Darkness/lighting overlay
 	std::unique_ptr<Drawable_DarknessOverlay> darkness_overlay;

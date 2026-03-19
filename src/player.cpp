@@ -86,6 +86,7 @@
 #include "chaos/discord_integration.h"
 #include "chaos/multiplayer_state.h"
 #include "chaos/net_manager.h"
+#include "editor/scene_editor.h"
 
 #if defined(__ANDROID__) && !defined(USE_LIBRETRO)
 #include "platform/android/android.h"
@@ -404,6 +405,10 @@ void Player::Update(bool update_scene) {
 }
 
 void Player::Draw() {
+	// Editor handles its own rendering
+	if (Editor::editor_active) {
+		return;
+	}
 	Graphics::Update();
 	Graphics::Draw(*DisplayUi->GetDisplaySurface());
 	DisplayUi->UpdateDisplay();

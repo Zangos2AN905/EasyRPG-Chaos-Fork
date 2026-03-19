@@ -74,6 +74,8 @@ public:
 	bool OpenURL(std::string_view url) override;
 	Rect GetWindowMetrics() const override;
 	bool HandleErrorOutput(const std::string &message) override;
+	void* GetSDLWindow() override { return sdl_window; }
+	void* GetSDLRenderer() override { return sdl_renderer; }
 
 #ifdef SUPPORT_AUDIO
 	AudioInterface& GetAudio() override;

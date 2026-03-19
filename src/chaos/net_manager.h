@@ -10,9 +10,11 @@
 #include <functional>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include "chaos/multiplayer_mode.h"
 #include "chaos/net_packet.h"
 #include "chaos/relay_connection.h"
+#include "chaos/game_file_transfer.h"
 
 // Forward declare ENet types to avoid exposing header
 typedef struct _ENetHost ENetHost;
@@ -113,6 +115,20 @@ public:
 	const std::vector<bool>& GetHostSwitches() const { return host_switches; }
 	const std::vector<int32_t>& GetHostVariables() const { return host_variables; }
 
+	// Game name (set from relay room info or JoinAccept)
+	const std::string& GetHostGameName() const { return host_game_name; }
+	void SetHostGameName(const std::string& name) { host_game_name = name; }
+
+	// Game file transfer
+	void RequestGameFiles();
+	void HandleGameFileRequest(uint16_t peer_id);
+	void HandleGameFileInfo(PacketReader& reader);
+	void HandleGameFileData(PacketReader& reader);
+	void HandleGameFileDone();
+	void UpdateFileTransfers();
+	GameFileTransferClient* GetClientTransfer() { return client_transfer.get(); }
+	bool IsDownloadingGame() const { return client_transfer != nullptr; }
+
 	// Callbacks
 	void SetPacketCallback(PacketCallback cb) { packet_callback = std::move(cb); }
 	void SetConnectCallback(std::function<void(uint16_t)> cb) { connect_callback = std::move(cb); }
@@ -157,6 +173,7 @@ private:
 	std::vector<HostPartyMember> host_party;
 	std::vector<bool> host_switches;
 	std::vector<int32_t> host_variables;
+	std::string host_game_name;
 	uint16_t local_peer_id = 0;
 	uint16_t next_peer_id = 1;
 	std::string local_player_name;
@@ -167,6 +184,10 @@ private:
 	PacketCallback packet_callback;
 	std::function<void(uint16_t)> connect_callback;
 	std::function<void(uint16_t)> disconnect_callback;
+
+	// File transfer state
+	std::unordered_map<uint16_t, std::unique_ptr<GameFileTransferHost>> host_transfers;
+	std::unique_ptr<GameFileTransferClient> client_transfer;
 };
 
 } // namespace Chaos

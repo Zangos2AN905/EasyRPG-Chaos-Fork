@@ -74,6 +74,7 @@ void MultiplayerState::StopMultiplayer() {
 	is_local_god = false;
 	god_player_id = 0;
 	CleanupHorrorMode();
+	CleanupAsymMode();
 	battle_invite_window.reset();
 	remote_battle_actions.clear();
 	remote_players.clear();
@@ -191,6 +192,11 @@ void MultiplayerState::Update() {
 	if (net.GetMode() == MultiplayerMode::Horror) {
 		UpdateHorror();
 	}
+
+	// Update ASYM mode
+	if (net.GetMode() == MultiplayerMode::Asym) {
+		UpdateAsym();
+	}
 }
 
 void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
@@ -219,6 +225,11 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 	// Initialize Horror mode on map load (skip if spectating — already dead)
 	if (net.IsConnected() && net.GetMode() == MultiplayerMode::Horror && !spectating) {
 		InitHorrorMode();
+	}
+
+	// Initialize ASYM mode on map load (skip if spectating — already dead)
+	if (net.IsConnected() && net.GetMode() == MultiplayerMode::Asym && !spectating) {
+		InitAsymMode();
 	}
 
 	if (net.IsHost() && net.IsConnected()) {
@@ -448,6 +459,12 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 			break;
 		case PacketType::RawberrySync:
 			HandleRawberrySync(data, len);
+			break;
+		case PacketType::AsymHunterAssign:
+			HandleAsymHunterAssign(data, len);
+			break;
+		case PacketType::AsymKill:
+			HandleAsymKill(data, len);
 			break;
 		default:
 			break;
@@ -1860,6 +1877,13 @@ bool MultiplayerState::IsHorrorMode() const {
 	return active && net.IsConnected() && net.GetMode() == MultiplayerMode::Horror;
 }
 
+// ========== ASYM Mode ==========
+
+bool MultiplayerState::IsAsymMode() const {
+	auto& net = NetManager::Instance();
+	return active && net.IsConnected() && net.GetMode() == MultiplayerMode::Asym;
+}
+
 void MultiplayerState::InitHorrorMode() {
 	// Enable pitch-black darkness with flashlight
 	if (darkness_overlay) {
@@ -2221,6 +2245,336 @@ void MultiplayerState::SpawnRawberry() {
 void MultiplayerState::CreateRawberrySprite() {
 	if (!current_spriteset || !rawberry) return;
 	current_spriteset->AddCharacterSprite(rawberry.get());
+}
+
+// ========== ASYM Mode Implementation ==========
+
+void MultiplayerState::AssignRandomHunter() {
+	auto& net = NetManager::Instance();
+	if (net.GetMode() != MultiplayerMode::Asym) return;
+
+	// Build list of all peer IDs including host
+	std::vector<uint16_t> all_ids;
+	all_ids.push_back(net.GetLocalPeerId()); // host
+	for (auto& p : net.GetPeers()) {
+		all_ids.push_back(p.peer_id);
+	}
+
+	// Pick a random hunter
+	int idx = Rand::GetRandomNumber(0, static_cast<int32_t>(all_ids.size()) - 1);
+	uint16_t chosen = all_ids[idx];
+
+	asym_hunter_id = chosen;
+	asym_is_local_hunter = (chosen == net.GetLocalPeerId());
+
+	// Broadcast AsymHunterAssign to all clients
+	PacketWriter packet(PacketType::AsymHunterAssign);
+	packet.write(chosen);
+	net.Broadcast(packet, true);
+
+	Output::Debug("ASYM: Assigned hunter to peer {}", chosen);
+}
+
+void MultiplayerState::HandleAsymHunterAssign(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	if (net.GetMode() != MultiplayerMode::Asym) return;
+
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t assigned_id = reader.readU16();
+	asym_hunter_id = assigned_id;
+	asym_is_local_hunter = (assigned_id == net.GetLocalPeerId());
+
+	if (asym_is_local_hunter) {
+		Output::Debug("ASYM: You are the HUNTER!");
+	} else {
+		Output::Debug("ASYM: Hunter is peer {}. You are a SURVIVOR.", assigned_id);
+	}
+}
+
+void MultiplayerState::HandleAsymKill(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	if (net.GetMode() != MultiplayerMode::Asym) return;
+
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t victim_id = reader.readU16();
+
+	// If we are the victim, trigger jumpscare and spectator mode
+	if (victim_id == net.GetLocalPeerId()) {
+		Output::Debug("ASYM: You were caught by the hunter!");
+
+		// Play scare sound
+		auto scare_stream = FileFinder::OpenSound("RawberryScare");
+		if (scare_stream) {
+			auto se_cache = AudioSeCache::Create(std::move(scare_stream), "RawberryScare");
+			if (se_cache) {
+				se_cache->GetSeData();
+				Audio().SE_Play(std::move(se_cache), 100, 100, 50);
+			}
+		}
+
+		// Show jumpscare image fullscreen
+		horror_jumpscare_sprite = std::make_unique<Sprite>();
+		horror_jumpscare_sprite->SetZ(Priority_Maximum);
+		auto img_stream = FileFinder::OpenImage("Picture", "RAWBERRY_SCARE");
+		if (img_stream) {
+			auto bitmap = Bitmap::Create(std::move(img_stream), false);
+			if (bitmap) {
+				horror_jumpscare_sprite->SetBitmap(bitmap);
+				horror_jumpscare_sprite->SetX((Player::screen_width - bitmap->GetWidth()) / 2);
+				horror_jumpscare_sprite->SetY((Player::screen_height - bitmap->GetHeight()) / 2);
+			}
+		}
+
+		// Stop horror music during jumpscare
+		Audio().BGM_Stop();
+
+		horror_jumpscare_active = true;
+		horror_jumpscare_timer = HORROR_JUMPSCARE_DURATION;
+	} else {
+		Output::Debug("ASYM: Peer {} was caught by the hunter", victim_id);
+	}
+}
+
+void MultiplayerState::InitAsymMode() {
+	// Re-apply hunter sprite every map load (map changes reset the graphic)
+	if (asym_is_local_hunter && Main_Data::game_player) {
+		Main_Data::game_player->SetSpriteGraphic("Chara1", 7);
+	}
+
+	// Hunter: always ensure darkness is off
+	if (asym_is_local_hunter && darkness_overlay) {
+		darkness_overlay->SetEnabled(false);
+	}
+
+	// One-time initialization
+	if (asym_initialized) return;
+	asym_initialized = true;
+
+	// Survivors get darkness + flashlight (same as horror)
+	if (!asym_is_local_hunter) {
+		if (darkness_overlay) {
+			darkness_overlay->SetDarknessLevel(HORROR_DARKNESS_LEVEL);
+			darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+			darkness_overlay->SetEnabled(true);
+		}
+
+		horror_flashlight_on = true;
+		horror_battery_drain_counter = 0;
+
+		// Battery HUD
+		if (!horror_battery_window) {
+			horror_battery_window = std::make_unique<Window_Help>(
+				Player::screen_width - 130, 0, 130, 32);
+		}
+		horror_battery_window->SetText(fmt::format("Battery: {}%", horror_battery_percent));
+	}
+
+	// Play horror music for everyone
+	horror_last_map_id = -1;
+	horror_overridden_bgm.clear();
+	horror_music_override_delay = 0;
+	ApplyHorrorMusicEffect();
+
+	Output::Debug("ASYM: Mode initialized (hunter={})", asym_is_local_hunter ? "true" : "false");
+}
+
+void MultiplayerState::CleanupAsymMode() {
+	asym_is_local_hunter = false;
+	asym_hunter_id = 0;
+	asym_initialized = false;
+
+	// Clean up shared horror state used by ASYM survivors
+	horror_battery_percent = 100;
+	horror_flashlight_on = true;
+	horror_battery_drain_counter = 0;
+	horror_battery_window.reset();
+	horror_current_map_music.clear();
+	horror_last_map_id = -1;
+	horror_overridden_bgm.clear();
+	horror_music_override_delay = 0;
+	horror_jumpscare_active = false;
+	horror_jumpscare_timer = 0;
+	horror_jumpscare_sprite.reset();
+
+	// Restore BGM
+	if (Main_Data::game_system) {
+		Audio().BGM_Stop();
+		auto& bgm = Main_Data::game_system->GetCurrentBGM();
+		if (!bgm.name.empty() && bgm.name != "(OFF)") {
+			Main_Data::game_system->BgmPlay(bgm);
+		}
+	}
+}
+
+void MultiplayerState::UpdateAsym() {
+	// Handle active jumpscare (survivor caught)
+	if (horror_jumpscare_active) {
+		horror_jumpscare_timer--;
+		if (horror_jumpscare_timer <= 0) {
+			horror_jumpscare_active = false;
+			horror_jumpscare_sprite.reset();
+			if (!ShouldInterceptGameOver()) {
+				Scene::Push(std::make_shared<Scene_Gameover>());
+			}
+		}
+		return;
+	}
+
+	// Don't update while spectating
+	if (spectating) return;
+
+	// Switch horror music when entering a different map
+	if (Game_Map::GetMapId() != horror_last_map_id) {
+		horror_current_map_music.clear();
+		ApplyHorrorMusicEffect();
+	}
+
+	// Detect game trying to change BGM and re-override
+	if (Main_Data::game_system) {
+		auto& bgm = Main_Data::game_system->GetCurrentBGM();
+		if (!bgm.name.empty() && bgm.name != "(OFF)" && bgm.name != horror_overridden_bgm) {
+			horror_overridden_bgm = bgm.name;
+			horror_music_override_delay = 5;
+		}
+	}
+	if (horror_music_override_delay > 0) {
+		horror_music_override_delay--;
+		if (horror_music_override_delay == 0) {
+			horror_current_map_music.clear();
+			ApplyHorrorMusicEffect();
+		}
+	}
+
+	// === Survivor-only logic ===
+	if (!asym_is_local_hunter) {
+		// Flashlight toggle
+		if (Input::IsTriggered(Input::N2) && horror_battery_percent > 0) {
+			horror_flashlight_on = !horror_flashlight_on;
+			if (darkness_overlay) {
+				darkness_overlay->SetPlayerLight(horror_flashlight_on ? HORROR_FLASHLIGHT_RADIUS : 15);
+			}
+		}
+
+		// Battery drain
+		if (horror_battery_percent > 0 && horror_flashlight_on) {
+			horror_battery_drain_counter++;
+			if (horror_battery_drain_counter >= HORROR_BATTERY_DRAIN_INTERVAL) {
+				horror_battery_drain_counter = 0;
+				horror_battery_percent--;
+
+				if (darkness_overlay) {
+					if (horror_battery_percent > 20) {
+						darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+					} else if (horror_battery_percent > 0) {
+						int reduced_radius = HORROR_FLASHLIGHT_RADIUS * horror_battery_percent / 20;
+						darkness_overlay->SetPlayerLight(std::max(reduced_radius, 8));
+					}
+				}
+
+				if (horror_battery_window) {
+					horror_battery_window->SetText(fmt::format("Battery: {}%", horror_battery_percent));
+				}
+			}
+		}
+
+		// Flicker effect
+		if (horror_flashlight_on && horror_battery_percent > 0 && horror_battery_percent <= 10 && darkness_overlay) {
+			int frame_mod = horror_battery_drain_counter % 60;
+			if (frame_mod < 5 || (frame_mod > 20 && frame_mod < 23) || (frame_mod > 45 && frame_mod < 47)) {
+				darkness_overlay->SetPlayerLight(4);
+			} else {
+				int reduced = HORROR_FLASHLIGHT_RADIUS * horror_battery_percent / 20;
+				darkness_overlay->SetPlayerLight(std::max(reduced, 10));
+			}
+		}
+
+		// Battery dead
+		if (horror_battery_percent <= 0 && horror_flashlight_on) {
+			horror_flashlight_on = false;
+			if (darkness_overlay) {
+				darkness_overlay->SetPlayerLight(15);
+			}
+			if (horror_battery_window) {
+				horror_battery_window->SetText("Battery: DEAD");
+			}
+		}
+
+		// Add remote player flashlight lights (survivors see each other's lights)
+		if (darkness_overlay) {
+			darkness_overlay->ClearFixedLights();
+			for (auto& [id, rp] : remote_players) {
+				if (rp && rp->IsOnCurrentMap() && id != asym_hunter_id) {
+					darkness_overlay->AddFixedLight(
+						rp->GetScreenX(), rp->GetScreenY() - 8,
+						HORROR_FLASHLIGHT_RADIUS, 255, 255, 245, 220);
+				}
+			}
+		}
+	}
+
+	// === Hunter collision check (host validates) ===
+	auto& net = NetManager::Instance();
+	if (net.IsHost()) {
+		AsymCheckHunterCollision();
+	}
+}
+
+void MultiplayerState::AsymCheckHunterCollision() {
+	auto& net = NetManager::Instance();
+
+	// Get hunter position
+	int hunter_x, hunter_y, hunter_map;
+
+	if (asym_is_local_hunter) {
+		// Host is the hunter
+		auto* hero = Main_Data::game_player.get();
+		if (!hero) return;
+		hunter_x = hero->GetX();
+		hunter_y = hero->GetY();
+		hunter_map = Game_Map::GetMapId();
+	} else {
+		// Hunter is a remote player
+		auto* hunter = GetRemotePlayer(asym_hunter_id);
+		if (!hunter || !hunter->IsOnCurrentMap()) return;
+		hunter_x = hunter->GetX();
+		hunter_y = hunter->GetY();
+		hunter_map = Game_Map::GetMapId();
+	}
+
+	// Check each survivor (non-hunter player)
+	// Check local player if they're a survivor
+	if (!asym_is_local_hunter && !spectating) {
+		auto* hero = Main_Data::game_player.get();
+		if (hero && hero->GetX() == hunter_x && hero->GetY() == hunter_y) {
+			// Local player caught!
+			Output::Debug("ASYM: Hunter caught local player!");
+			PacketWriter packet(PacketType::AsymKill);
+			packet.write(net.GetLocalPeerId());
+			net.Broadcast(packet, true);
+			// Also trigger locally
+			HandleAsymKill(packet.data(), packet.size());
+			return;
+		}
+	}
+
+	// Check remote survivors
+	for (auto& [id, rp] : remote_players) {
+		if (!rp || !rp->IsOnCurrentMap()) continue;
+		if (id == asym_hunter_id) continue; // Skip hunter
+
+		if (rp->GetX() == hunter_x && rp->GetY() == hunter_y) {
+			// Remote survivor caught!
+			Output::Debug("ASYM: Hunter caught peer {}!", id);
+			PacketWriter packet(PacketType::AsymKill);
+			packet.write(id);
+			net.Broadcast(packet, true);
+			return;
+		}
+	}
 }
 
 } // namespace Chaos

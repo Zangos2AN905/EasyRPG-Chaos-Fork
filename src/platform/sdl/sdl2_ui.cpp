@@ -551,6 +551,9 @@ bool Sdl2Ui::ProcessEvents() {
 
 	// Poll SDL events and process them
 	while (SDL_PollEvent(&evnt)) {
+		if (sdl_event_forwarder) {
+			sdl_event_forwarder(&evnt);
+		}
 		ProcessEvent(evnt);
 
 		if (Player::exit_flag)

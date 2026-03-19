@@ -323,6 +323,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/scene_item.h
 	src/scene_language.cpp
 	src/scene_language.h
+	src/scene_rpgstore.cpp
+	src/scene_rpgstore.h
 	src/scene_load.cpp
 	src/scene_load.h
 	src/scene_logo.cpp
@@ -519,8 +521,12 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/scene_multiplayer_lobby.h
 	src/chaos/scene_multiplayer_wait.cpp
 	src/chaos/scene_multiplayer_wait.h
+	src/chaos/game_file_transfer.cpp
+	src/chaos/game_file_transfer.h
 	src/chaos/scene_god_mode.cpp
 	src/chaos/scene_god_mode.h
+	src/editor/scene_editor.cpp
+	src/editor/scene_editor.h
 )
 
 # These are actually unused when building in CMake
@@ -621,6 +627,18 @@ elseif(PLAYER_TARGET_PLATFORM STREQUAL "SDL2")
 		src/platform/sdl/sdl2_ui.cpp
 		src/platform/sdl/sdl2_ui.h)
 	target_compile_definitions(${PROJECT_NAME} PUBLIC USE_SDL=2)
+
+	# Dear ImGui (editor)
+	target_sources(${PROJECT_NAME} PRIVATE
+		lib/imgui/imgui.cpp
+		lib/imgui/imgui_draw.cpp
+		lib/imgui/imgui_tables.cpp
+		lib/imgui/imgui_widgets.cpp
+		lib/imgui/backends/imgui_impl_sdl2.cpp
+		lib/imgui/backends/imgui_impl_sdlrenderer2.cpp)
+	target_include_directories(${PROJECT_NAME} PRIVATE
+		${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui
+		${CMAKE_CURRENT_SOURCE_DIR}/lib/imgui/backends)
 
 	# SDL2 depends on some systems on SDL2::SDL2main but SDL2::SDL2 is not always a dependency of it
 	# Manually add the dependencies

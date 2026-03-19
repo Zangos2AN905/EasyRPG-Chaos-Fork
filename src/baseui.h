@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <string>
 #include <bitset>
+#include <functional>
 
 #include "system.h"
 #include "color.h"
@@ -267,6 +268,15 @@ public:
 	 * @return current video options.
 	 */
 	Game_ConfigVideo GetConfig() const;
+
+	/** @return the SDL_Window pointer (nullptr if not SDL2 backend) */
+	virtual void* GetSDLWindow() { return nullptr; }
+
+	/** @return the SDL_Renderer pointer (nullptr if not SDL2 backend) */
+	virtual void* GetSDLRenderer() { return nullptr; }
+
+	/** Optional callback for forwarding raw SDL events (used by editor/ImGui) */
+	std::function<void(void*)> sdl_event_forwarder;
 
 protected:
 	/**

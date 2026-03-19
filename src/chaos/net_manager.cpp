@@ -5,6 +5,7 @@
 #include "chaos/net_manager.h"
 #include "output.h"
 #include "player.h"
+#include "filefinder.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -227,6 +228,7 @@ void NetManager::Update() {
 			}
 			relay->ClearJoinResult();
 		}
+		UpdateFileTransfers();
 		return;
 	}
 
@@ -239,6 +241,7 @@ void NetManager::Update() {
 
 	// Ensure all queued outgoing packets are flushed
 	enet_host_flush(enet_host);
+	UpdateFileTransfers();
 }
 
 void NetManager::ProcessEvent(ENetEvent& event) {
@@ -297,6 +300,7 @@ void NetManager::HandleServerEvent(ENetEvent& event) {
 				accept.write(new_id);
 				accept.write(static_cast<uint8_t>(current_mode));
 				accept.write(local_player_name);  // Host name
+				accept.write(Player::game_title.empty() ? std::string("Unknown Game") : Player::game_title);  // Game name
 				// Send existing peer list
 				accept.write(static_cast<uint16_t>(peers.size() - 1));  // Exclude the new peer
 				for (auto& p : peers) {
@@ -327,6 +331,13 @@ void NetManager::HandleServerEvent(ENetEvent& event) {
 					connect_callback(new_id);
 				}
 			} else if (pi) {
+				// Handle game file transfer requests on the host
+				if (ptype == PacketType::GameFileRequest) {
+					HandleGameFileRequest(pi->peer_id);
+					enet_packet_destroy(event.packet);
+					break;
+				}
+
 				// Forward packet to callback
 				if (packet_callback) {
 					packet_callback(pi->peer_id, event.packet->data, event.packet->dataLength);
@@ -405,6 +416,7 @@ void NetManager::HandleClientEvent(ENetEvent& event) {
 				local_peer_id = reader.readU16();
 				current_mode = static_cast<MultiplayerMode>(reader.readU8());
 				std::string host_name = reader.readString();
+				host_game_name = reader.readString();
 
 				// Add host as peer 1
 				PeerInfo host_info;
@@ -490,6 +502,12 @@ void NetManager::HandleClientEvent(ENetEvent& event) {
 					host_variables[i] = reader.readI32();
 				}
 				Output::Debug("Multiplayer: Received {} variables from host", count);
+			} else if (ptype == PacketType::GameFileInfo) {
+				HandleGameFileInfo(reader);
+			} else if (ptype == PacketType::GameFileData) {
+				HandleGameFileData(reader);
+			} else if (ptype == PacketType::GameFileDone) {
+				HandleGameFileDone();
 			} else {
 				// Forward to callback
 				if (packet_callback) {
@@ -713,6 +731,7 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 			accept.write(source_id);
 			accept.write(static_cast<uint8_t>(current_mode));
 			accept.write(local_player_name);
+			accept.write(Player::game_title.empty() ? std::string("Unknown Game") : Player::game_title);
 			accept.write(static_cast<uint16_t>(peers.size() - 1));
 			for (auto& p : peers) {
 				if (p.peer_id != source_id) {
@@ -737,6 +756,12 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 				connect_callback(source_id);
 			}
 		} else if (pi) {
+			// Handle game file transfer requests on the relay host
+			if (ptype == PacketType::GameFileRequest) {
+				HandleGameFileRequest(pi->peer_id);
+				return;
+			}
+
 			// Known peer, forward to callback
 			if (packet_callback) {
 				packet_callback(pi->peer_id, data, len);
@@ -760,6 +785,7 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 			local_peer_id = reader.readU16();
 			current_mode = static_cast<MultiplayerMode>(reader.readU8());
 			std::string host_name = reader.readString();
+			host_game_name = reader.readString();
 
 			PeerInfo host_info;
 			host_info.peer_id = 1;
@@ -834,6 +860,12 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 			for (uint16_t i = 0; i < count; ++i) {
 				host_variables[i] = reader.readI32();
 			}
+		} else if (ptype == PacketType::GameFileInfo) {
+			HandleGameFileInfo(reader);
+		} else if (ptype == PacketType::GameFileData) {
+			HandleGameFileData(reader);
+		} else if (ptype == PacketType::GameFileDone) {
+			HandleGameFileDone();
 		} else {
 			if (packet_callback) {
 				packet_callback(0, data, len);
@@ -872,6 +904,117 @@ void NetManager::HandleRelayPeerDisconnected(uint16_t peer_id) {
 		if (disconnect_callback) {
 			disconnect_callback(peer_id);
 		}
+	}
+}
+
+// ============================================================
+// Game File Transfer Methods
+// ============================================================
+
+void NetManager::RequestGameFiles() {
+	if (!is_client) return;
+
+	// Determine destination path for the game
+	std::string games_dir;
+#ifdef _WIN32
+	wchar_t exe_path[MAX_PATH];
+	GetModuleFileNameW(NULL, exe_path, MAX_PATH);
+	std::wstring wpath(exe_path);
+	size_t pos = wpath.find_last_of(L"\\/");
+	if (pos != std::wstring::npos) {
+		wpath = wpath.substr(0, pos);
+	}
+	int len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, NULL, 0, NULL, NULL);
+	games_dir.resize(len - 1);
+	WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, &games_dir[0], len, NULL, NULL);
+#else
+	games_dir = ".";
+#endif
+
+	// Create destination using the host's game name
+	std::string safe_name = host_game_name;
+	// Sanitize folder name
+	for (char& c : safe_name) {
+		if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+			c = '_';
+		}
+	}
+	if (safe_name.empty()) safe_name = "DownloadedGame";
+
+	std::string dest = games_dir + "/" + safe_name;
+
+	client_transfer = std::make_unique<GameFileTransferClient>();
+	client_transfer->SetDestination(dest);
+
+	// Send request to host
+	PacketWriter pw(PacketType::GameFileRequest);
+	SendToServer(pw, true);
+
+	Output::Debug("GameFileTransfer: Requesting game files from host, dest={}", dest);
+}
+
+void NetManager::HandleGameFileRequest(uint16_t peer_id) {
+	if (!is_host) return;
+
+	// Get the current game's filesystem path
+	auto game_fs = FileFinder::Game();
+	std::string game_path = game_fs.GetFullPath();
+
+	if (game_path.empty()) {
+		Output::Warning("GameFileTransfer: Cannot serve files - no game path");
+		return;
+	}
+
+	Output::Debug("GameFileTransfer: Peer {} requested game files from path: {}", peer_id, game_path);
+
+	auto transfer = std::make_unique<GameFileTransferHost>();
+	transfer->Start(game_path);
+	host_transfers[peer_id] = std::move(transfer);
+}
+
+void NetManager::HandleGameFileInfo(PacketReader& reader) {
+	uint16_t file_count = reader.readU16();
+	int32_t total_bytes = reader.readI32();
+
+	if (client_transfer) {
+		client_transfer->OnFileInfo(file_count, total_bytes);
+	}
+}
+
+void NetManager::HandleGameFileData(PacketReader& reader) {
+	std::string path = reader.readString();
+	uint8_t is_last = reader.readU8();
+	uint16_t data_size = reader.readU16();
+	const uint8_t* data = reader.readBytes(data_size);
+
+	if (client_transfer && data) {
+		client_transfer->OnFileData(path, data, data_size, is_last != 0);
+	}
+}
+
+void NetManager::HandleGameFileDone() {
+	if (client_transfer) {
+		client_transfer->OnTransferDone();
+	}
+}
+
+void NetManager::UpdateFileTransfers() {
+	// Host: send queued chunks for each active transfer
+	if (is_host) {
+		std::vector<uint16_t> done_peers;
+		for (auto& [peer_id, transfer] : host_transfers) {
+			if (!transfer->SendChunks(*this, peer_id, 4)) {
+				done_peers.push_back(peer_id);
+			}
+		}
+		for (auto pid : done_peers) {
+			host_transfers.erase(pid);
+		}
+	}
+
+	// Client: update the writer thread
+	if (client_transfer) {
+		client_transfer->Update();
 	}
 }
 

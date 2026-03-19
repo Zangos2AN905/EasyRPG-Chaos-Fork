@@ -719,7 +719,7 @@ void Scene_MultiplayerLobby::RefreshServerList() {
 	auto rooms = net.GetRoomList();
 	net.ClearRoomList();
 
-	static const char* mode_names[] = {"Normal", "Team Party", "Chaotix", "Pandora", "God Mode"};
+	static const char* mode_names[] = {"Normal", "Team Party", "Chaotix", "Pandora", "God Mode", "Horror", "ASYM Mode"};
 
 	browser_room_codes.clear();
 	browser_game_names.clear();
@@ -729,7 +729,7 @@ void Scene_MultiplayerLobby::RefreshServerList() {
 		options.push_back("No servers found");
 	} else {
 		for (auto& r : rooms) {
-			std::string mode_str = (r.mode < 5) ? mode_names[r.mode] : "Unknown";
+			std::string mode_str = (r.mode < 7) ? mode_names[r.mode] : "Unknown";
 			std::string game = r.game_name.empty() ? "Unknown" : r.game_name;
 			options.push_back(fmt::format("[{}] {} - {} ({} p.)",
 				r.code, game, r.host_name, r.players));
@@ -779,6 +779,11 @@ void Scene_MultiplayerLobby::StartGame() {
 	// If God Mode, randomly assign a god player and broadcast
 	if (net.GetMode() == MultiplayerMode::GodMode) {
 		MultiplayerState::Instance().AssignRandomGod();
+	}
+
+	// If ASYM Mode, randomly assign the hunter and broadcast
+	if (net.GetMode() == MultiplayerMode::Asym) {
+		MultiplayerState::Instance().AssignRandomHunter();
 	}
 
 	// Pop this lobby and proceed to logo/title

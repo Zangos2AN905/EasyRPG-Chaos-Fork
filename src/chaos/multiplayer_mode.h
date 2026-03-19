@@ -16,6 +16,7 @@ enum class MultiplayerMode {
 	Pandora,       // Like Normal but switches/variables sync
 	GodMode,       // One controller, rest play normally
 	Horror,        // Dark survival mode with flashlight + battery
+	Asym,          // Asymmetric horror: one player is the hunter
 	Count
 };
 
@@ -38,6 +39,7 @@ inline const ModeProperties& GetModeProperties(MultiplayerMode mode) {
 		{ "Pandora",    "Normal mode, but switches and variables sync.",                 0, true,  true,  false, false, false },
 		{ "God Mode",   "One player controls the game. Others play normally.",           0, false, false, false, false, true  },
 		{ "Horror",     "SURVIVE.",                                                    0, false, false, false, false, false },
+		{ "ASYM Mode",  "One random player is the enemy. Survivors must hide.",          0, false, false, false, false, false },
 	};
 	return props[static_cast<int>(mode)];
 }

@@ -19,6 +19,7 @@
 #include "scene_map.h"
 #include "scene_save.h"
 #include "scene_debug.h"
+#include "editor/scene_editor.h"
 #include "scene_settings.h"
 #include "main_data.h"
 #include "game_map.h"
@@ -318,6 +319,19 @@ void Scene_Map::UpdateSceneCalling() {
 
 		if (call == nullptr && Input::IsTriggered(Input::DEBUG_SAVE)) {
 			call = std::make_shared<Scene_Save>();
+		}
+	}
+
+	// Editor: Press 7 to open map editor (disabled in multiplayer)
+	if (call == nullptr && Input::IsTriggered(Input::N7) && !Chaos::MultiplayerState::Instance().IsActive()) {
+		call = std::make_shared<Editor::Scene_Editor>();
+	}
+
+	// Auto-open editor if requested from multiplayer menu
+	if (call == nullptr && Editor::editor_requested) {
+		Editor::editor_requested = false;
+		if (!Chaos::MultiplayerState::Instance().IsActive()) {
+			call = std::make_shared<Editor::Scene_Editor>();
 		}
 	}
 

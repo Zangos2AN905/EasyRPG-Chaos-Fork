@@ -67,6 +67,16 @@ enum class PacketType : uint8_t {
 
 	// Horror mode sync
 	RawberrySync,     // Host -> All: Rawberry enemy position (horror mode)
+
+	// ASYM mode sync
+	AsymHunterAssign, // Host -> All: which player is the hunter
+	AsymKill,         // Hunter -> All: hunter caught a survivor (victim peer_id)
+
+	// Game file transfer
+	GameFileRequest,  // Client -> Host: request game files for download
+	GameFileInfo,     // Host -> Client: file_count (u16) + total_bytes (i32)
+	GameFileData,     // Host -> Client: relative_path (str) + is_last (u8) + size (u16) + data
+	GameFileDone,     // Host -> Client: all files transferred
 };
 
 // Simple packet buffer for serialization
@@ -95,6 +105,10 @@ public:
 	void write(const std::string& s) {
 		write(static_cast<uint16_t>(s.size()));
 		buf.insert(buf.end(), s.begin(), s.end());
+	}
+
+	void writeBytes(const uint8_t* d, size_t len) {
+		buf.insert(buf.end(), d, d + len);
 	}
 
 	const uint8_t* data() const { return buf.data(); }
@@ -142,6 +156,13 @@ public:
 		std::string s(reinterpret_cast<const char*>(buf + pos), len);
 		pos += len;
 		return s;
+	}
+
+	const uint8_t* readBytes(size_t len) {
+		if (pos + len > length) return nullptr;
+		const uint8_t* ptr = buf + pos;
+		pos += len;
+		return ptr;
 	}
 
 	bool hasData() const { return pos < length; }
