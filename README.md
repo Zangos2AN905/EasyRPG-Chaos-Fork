@@ -27,7 +27,7 @@ Documentation is available at the documentation wiki: https://wiki.easyrpg.org
 - libpng for PNG image support.
 - zlib for XYZ image and ZIP archive support.
 - fmtlib >= 6 for text formatting/coloring and internal logging.
-- curl for AI support
+- curl for downloading support
 
 ### extended / recommended
 
