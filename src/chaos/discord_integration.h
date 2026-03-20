@@ -30,56 +30,38 @@ namespace Chaos {
  */
 namespace DiscordIntegration {
 
-	/** Initialize Discord RPC. Call once at startup. */
+#ifdef HAVE_DISCORD_RPC
+
 	void Initialize();
-
-	/** Shut down Discord RPC. Call once at exit. */
 	void Shutdown();
-
-	/**
-	 * Update the Rich Presence based on the current scene/game state.
-	 * Internally rate-limited so it's safe to call every frame.
-	 */
 	void Update();
-
-	/** @return whether Discord Rich Presence is enabled */
 	bool IsEnabled();
-
-	/** Enable or disable Discord Rich Presence at runtime */
 	void SetEnabled(bool enabled);
-
-	/** @return true if we received the local Discord user info */
 	bool HasDiscordUser();
-
-	/** @return the local Discord username (empty if not connected) */
 	const std::string& GetDiscordUsername();
-
-	/** @return the local Discord user ID (empty if not connected) */
 	const std::string& GetDiscordUserId();
-
-	/**
-	 * Set the join secret for Discord RPC (the relay room code).
-	 * When set, Discord will show a "Join" button on the user's profile.
-	 * Pass empty string to clear.
-	 */
 	void SetJoinSecret(const std::string& secret);
-
-	/**
-	 * Set party info for Discord RPC display.
-	 * @param party_id unique identifier for the party
-	 * @param current_size number of players in the party
-	 * @param max_size maximum number of players
-	 */
 	void SetPartyInfo(const std::string& party_id, int current_size, int max_size);
-
-	/** Clear join/party info (call when leaving multiplayer) */
 	void ClearMultiplayerPresence();
-
-	/**
-	 * Set a callback for when someone joins via Discord.
-	 * The callback receives the join secret (room code).
-	 */
 	void SetJoinCallback(std::function<void(const std::string&)> callback);
+
+#else
+
+	// No-op stubs when Discord RPC is not available
+	inline void Initialize() {}
+	inline void Shutdown() {}
+	inline void Update() {}
+	inline bool IsEnabled() { return false; }
+	inline void SetEnabled(bool) {}
+	inline bool HasDiscordUser() { return false; }
+	inline const std::string& GetDiscordUsername() { static const std::string empty; return empty; }
+	inline const std::string& GetDiscordUserId() { static const std::string empty; return empty; }
+	inline void SetJoinSecret(const std::string&) {}
+	inline void SetPartyInfo(const std::string&, int, int) {}
+	inline void ClearMultiplayerPresence() {}
+	inline void SetJoinCallback(std::function<void(const std::string&)>) {}
+
+#endif
 
 } // namespace DiscordIntegration
 } // namespace Chaos

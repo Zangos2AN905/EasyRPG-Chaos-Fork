@@ -616,7 +616,7 @@ void MultiplayerState::HandleGodCommand(uint16_t sender_id, const uint8_t* data,
 		case 4: {
 			// Full heal all party
 			if (Main_Data::game_party) {
-				auto& actors = Main_Data::game_party->GetActors();
+				auto actors = Main_Data::game_party->GetActors();
 				for (auto* actor : actors) {
 					actor->FullHeal();
 				}

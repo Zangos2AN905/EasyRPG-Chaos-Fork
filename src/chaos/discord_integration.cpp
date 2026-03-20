@@ -16,6 +16,9 @@
  */
 
 #include "discord_integration.h"
+
+#ifdef HAVE_DISCORD_RPC
+
 #include "../output.h"
 #include "../player.h"
 #include "../scene.h"
@@ -257,6 +260,7 @@ void Chaos::DiscordIntegration::Update() {
 	// Multiplayer join/party info
 	if (!join_secret_buf.empty()) {
 		presence.joinSecret = join_secret_buf.c_str();
+		presence.instance = 1;
 	}
 	if (!party_id_buf.empty()) {
 		presence.partyId = party_id_buf.c_str();
@@ -326,3 +330,5 @@ void Chaos::DiscordIntegration::ClearMultiplayerPresence() {
 void Chaos::DiscordIntegration::SetJoinCallback(std::function<void(const std::string&)> callback) {
 	join_callback = std::move(callback);
 }
+
+#endif // HAVE_DISCORD_RPC

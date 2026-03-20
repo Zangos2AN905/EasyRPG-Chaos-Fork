@@ -79,15 +79,25 @@ void Scene_MultiplayerWait::vUpdate() {
 		Output::Debug("Multiplayer: Host is on map {} at ({}, {}), {} actors, starting client game",
 			map_id, map_x, map_y, host_party.size());
 
-		// Override spawn location to host's position
-		Player::start_map_id = map_id;
-		Player::party_x_position = map_x;
-		Player::party_y_position = map_y;
+		// Safety: ensure all game objects exist before touching them.
+		// They should have been created during CreateGameObjects/ResetGameObjects
+		// but if anything went wrong, recreate them now.
+		if (!Main_Data::game_system || !Main_Data::game_party ||
+			!Main_Data::game_player || !Main_Data::game_switches ||
+			!Main_Data::game_variables || !Main_Data::game_actors) {
+			Output::Debug("Multiplayer: Game objects missing, calling ResetGameObjects");
+			Player::ResetGameObjects();
+		}
 
-		// Use the standard new game setup
-		Player::SetupNewGame();
+		// Pre-game setup (replaces Player::SetupNewGame to apply host
+		// state BEFORE the map is loaded so events start correctly)
+		Main_Data::game_system->BgmFade(800, true);
+		Main_Data::game_system->ResetFrameCounter();
+		Main_Data::game_system->SetAtbMode(
+			static_cast<Game_System::AtbMode>(lcf::Data::battlecommands.easyrpg_default_atb_mode));
 
-		// Apply host's party composition and actor levels
+		// Apply host's party composition and actor levels BEFORE map load
+		Main_Data::game_party->SetupNewGame();
 		if (!host_party.empty()) {
 			Main_Data::game_party->Clear();
 			for (const auto& member : host_party) {
@@ -99,7 +109,31 @@ void Scene_MultiplayerWait::vUpdate() {
 			}
 		}
 
-		// In team mode, set the player's sprite to their assigned actor
+		// Apply switches from host BEFORE map load so events use correct state
+		auto& host_switches = net.GetHostSwitches();
+		if (!host_switches.empty()) {
+			for (size_t i = 0; i < host_switches.size(); ++i) {
+				Main_Data::game_switches->Set(static_cast<int>(i + 1), host_switches[i]);
+			}
+			Output::Debug("Multiplayer: Applied {} switches from host", host_switches.size());
+		}
+
+		// Apply variables from host BEFORE map load
+		auto& host_variables = net.GetHostVariables();
+		if (!host_variables.empty()) {
+			for (size_t i = 0; i < host_variables.size(); ++i) {
+				Main_Data::game_variables->Set(static_cast<int>(i + 1), host_variables[i]);
+			}
+			Output::Debug("Multiplayer: Applied {} variables from host", host_variables.size());
+		}
+
+		// Set spawn location and load the map
+		Player::start_map_id = map_id;
+		Player::party_x_position = map_x;
+		Player::party_y_position = map_y;
+		Player::SetupPlayerSpawn();
+
+		// Set player sprite for team modes AFTER spawn (MoveTo calls ResetGraphic)
 		auto mode = net.GetMode();
 		if (mode == MultiplayerMode::TeamParty || mode == MultiplayerMode::Chaotix) {
 			int player_index = static_cast<int>(net.GetLocalPeerId()) - 1;
@@ -116,21 +150,8 @@ void Scene_MultiplayerWait::vUpdate() {
 			Main_Data::game_player->ResetGraphic();
 		}
 
-		// Apply switches/variables from host
-		auto& host_switches = net.GetHostSwitches();
-		if (!host_switches.empty() && Main_Data::game_switches) {
-			for (size_t i = 0; i < host_switches.size(); ++i) {
-				Main_Data::game_switches->Set(static_cast<int>(i + 1), host_switches[i]);
-			}
-			Output::Debug("Multiplayer: Applied {} switches from host", host_switches.size());
-		}
-		auto& host_variables = net.GetHostVariables();
-		if (!host_variables.empty() && Main_Data::game_variables) {
-			for (size_t i = 0; i < host_variables.size(); ++i) {
-				Main_Data::game_variables->Set(static_cast<int>(i + 1), host_variables[i]);
-			}
-			Output::Debug("Multiplayer: Applied {} variables from host", host_variables.size());
-		}
+		// Push the map scene
+		Scene::Push(std::make_shared<Scene_Map>(0));
 
 		return;
 	}
