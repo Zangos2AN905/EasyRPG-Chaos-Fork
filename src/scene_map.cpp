@@ -38,6 +38,7 @@
 #include "input.h"
 #include "game_dynrpg.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/multiplayer_chat.h"
 #include "chaos/scene_god_mode.h"
 
 using namespace std::chrono_literals;
@@ -66,6 +67,7 @@ Scene_Map::Scene_Map(int from_save_id)
 }
 
 Scene_Map::~Scene_Map() {
+	Chaos::MultiplayerChat::Instance().OnMapUnloaded();
 }
 
 void Scene_Map::Start() {
@@ -74,6 +76,9 @@ void Scene_Map::Start() {
 	message_window.reset(new Window_Message(Player::message_box_offset_x, Player::screen_height - MESSAGE_BOX_HEIGHT, MESSAGE_BOX_WIDTH, MESSAGE_BOX_HEIGHT));
 
 	Game_Message::SetWindow(message_window.get());
+
+	// Initialise multiplayer chat windows
+	Chaos::MultiplayerChat::Instance().OnMapLoaded();
 
 	// Called here instead of Scene Load, otherwise wrong graphic stack
 	// is used.
@@ -242,6 +247,12 @@ void Scene_Map::PreUpdateForegroundEvents(MapUpdateAsyncContext& actx) {
 }
 
 void Scene_Map::vUpdate() {
+	// Multiplayer chat: update overlay timers and handle input
+	if (Chaos::MultiplayerChat::Instance().Update()) {
+		// Chat input is active — block all game input this frame
+		return;
+	}
+
 	if (activate_inn) {
 		UpdateInn();
 		return;

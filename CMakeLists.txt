@@ -511,6 +511,12 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/game_rawberry.h
 	src/chaos/multiplayer_state.cpp
 	src/chaos/multiplayer_state.h
+	src/chaos/multiplayer_chat.cpp
+	src/chaos/multiplayer_chat.h
+	src/chaos/multiplayer_voice.cpp
+	src/chaos/multiplayer_voice.h
+	src/chaos/window_chat_dialogue.cpp
+	src/chaos/window_chat_dialogue.h
 	src/chaos/drawable_rubber_band.cpp
 	src/chaos/drawable_rubber_band.h
 	src/chaos/drawable_darkness_overlay.cpp
@@ -525,6 +531,12 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/game_file_transfer.h
 	src/chaos/scene_god_mode.cpp
 	src/chaos/scene_god_mode.h
+	src/chaos/game_mode.h
+	src/chaos/game_mode.cpp
+	src/chaos/undertale_mode.h
+	src/chaos/undertale_mode.cpp
+	src/chaos/scene_gamemode_select.h
+	src/chaos/scene_gamemode_select.cpp
 	src/editor/scene_editor.cpp
 	src/editor/scene_editor.h
 )
@@ -1213,6 +1225,11 @@ if(PLAYER_HAS_AUDIO)
 		CONDITION PLAYER_WITH_OPUS
 		DEFINITION HAVE_OPUS
 		TARGET OpusFile::opusfile)
+
+	# opus (low-level codec for voice chat encoding/decoding)
+	player_find_package(NAME Opus
+		DEFINITION HAVE_OPUS_CODEC
+		TARGET Opus::opus)
 
 	# wildmidi
 	player_find_package(NAME WildMidi

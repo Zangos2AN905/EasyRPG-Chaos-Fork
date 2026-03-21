@@ -759,14 +759,14 @@ public:
 	 *
 	 * @return real x.
 	 */
-	int GetSpriteX() const;
+	virtual int GetSpriteX() const;
 
 	/**
 	 * Gets sprite y position in pixels.
 	 *
 	 * @return real y.
 	 */
-	int GetSpriteY() const;
+	virtual int GetSpriteY() const;
 
 	/**
 	 * Gets remaining step

@@ -182,6 +182,8 @@ private:
 	void HandleRawberrySync(const uint8_t* data, size_t len);
 	void HandleAsymHunterAssign(const uint8_t* data, size_t len);
 	void HandleAsymKill(const uint8_t* data, size_t len);
+	void HandleChatMessage(uint16_t sender_id, const uint8_t* data, size_t len);
+	void HandleVoiceData(uint16_t sender_id, const uint8_t* data, size_t len);
 
 	// Sync functions
 	void SendLocalPlayerPosition();

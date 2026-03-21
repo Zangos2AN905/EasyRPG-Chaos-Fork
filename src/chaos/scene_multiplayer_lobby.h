@@ -8,6 +8,7 @@
 
 #include "scene.h"
 #include "window_command.h"
+#include "window_command_horizontal.h"
 #include "window_help.h"
 #include "window_selectable.h"
 #include "chaos/relay_connection.h"
@@ -55,6 +56,10 @@ private:
 	void ClientStartGame();
 	void RefreshPlayerList();
 	void RefreshServerList();
+	void RefreshLobbyActionWindow();
+	void RefreshSettingsWindow();
+	void SetSettingsOpen(bool open);
+	std::string GetWaitingHelpText() const;
 
 	/** Check if host's game is available locally and switch to it if found. */
 	bool IsHostGameAvailable();
@@ -73,10 +78,11 @@ private:
 	std::unique_ptr<Window_Help> ip_window;
 	std::unique_ptr<Window_Help> status_window;
 	std::unique_ptr<Window_Help> playerlist_window;
-	std::unique_ptr<Window_Command> start_window;
+	std::unique_ptr<Window_Command_Horizontal> start_window;
 	std::unique_ptr<Window_Help> name_window;
 	std::unique_ptr<Window_Command> browser_window;
 	std::unique_ptr<Window_Help> browser_info_window;
+	std::unique_ptr<Window_Command> settings_window;
 
 	std::string player_name;
 	int name_cursor = 0;
@@ -86,6 +92,7 @@ private:
 	int connect_timer = 0;
 	bool connected = false;
 	bool relay_mode = false;
+	bool settings_open = false;
 
 	// Room code (used by server browser)
 	std::string room_code;

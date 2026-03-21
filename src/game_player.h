@@ -54,6 +54,8 @@ public:
 	void UpdateMovement(int amount) override;
 	void MoveRouteSetSpriteGraphic(std::string sprite_name, int index) override;
 	bool Move(int dir) override;
+	int GetSpriteX() const override;
+	int GetSpriteY() const override;
 	/** @} */
 
 	bool IsPendingTeleport() const;

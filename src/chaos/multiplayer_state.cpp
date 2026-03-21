@@ -3,10 +3,14 @@
  */
 
 #include "chaos/multiplayer_state.h"
+#include "chaos/multiplayer_chat.h"
+#include "chaos/multiplayer_voice.h"
 #include "chaos/net_manager.h"
 #include "chaos/net_packet.h"
 #include "chaos/drawable_rubber_band.h"
 #include "chaos/discord_integration.h"
+#include "chaos/undertale_mode.h"
+#include "chaos/game_mode.h"
 #include "game_actor.h"
 #include "game_actors.h"
 #include "game_event.h"
@@ -197,6 +201,9 @@ void MultiplayerState::Update() {
 	if (net.GetMode() == MultiplayerMode::Asym) {
 		UpdateAsym();
 	}
+
+	// Undertale mode: pixel movement is handled via Game_Player hooks
+	// (UndertaleMode::Instance().IsActive() checks for this mode)
 }
 
 void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
@@ -220,6 +227,13 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 	// Create darkness/lighting overlay (available in all modes, including singleplayer)
 	if (!darkness_overlay) {
 		darkness_overlay = std::make_unique<Drawable_DarknessOverlay>();
+	}
+
+	// Singleplayer Horror mode: enable darkness overlay
+	if (IsHorrorSingleplayerMode() && !net.IsConnected()) {
+		darkness_overlay->SetDarknessLevel(HORROR_DARKNESS_LEVEL);
+		darkness_overlay->SetPlayerLight(HORROR_FLASHLIGHT_RADIUS);
+		darkness_overlay->SetEnabled(true);
 	}
 
 	// Initialize Horror mode on map load (skip if spectating — already dead)
@@ -465,6 +479,12 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 			break;
 		case PacketType::AsymKill:
 			HandleAsymKill(data, len);
+			break;
+		case PacketType::ChatMessage:
+			HandleChatMessage(sender_id, data, len);
+			break;
+		case PacketType::VoiceData:
+			HandleVoiceData(sender_id, data, len);
 			break;
 		default:
 			break;
@@ -2337,6 +2357,37 @@ void MultiplayerState::HandleAsymKill(const uint8_t* data, size_t len) {
 	} else {
 		Output::Debug("ASYM: Peer {} was caught by the hunter", victim_id);
 	}
+}
+
+void MultiplayerState::HandleChatMessage(uint16_t sender_id, const uint8_t* data, size_t len) {
+	PacketReader reader(data, len);
+	reader.readType(); // skip packet type
+
+	uint8_t chat_type = reader.readU8(); // 0 = normal, 1 = dialogue
+	std::string text = reader.readString();
+
+	// Look up sender name
+	std::string sender_name;
+	auto* remote = GetRemotePlayer(sender_id);
+	if (remote) {
+		sender_name = remote->GetPlayerName();
+	} else {
+		sender_name = "Peer " + std::to_string(sender_id);
+	}
+
+	MultiplayerChat::Instance().OnChatMessageReceived(
+		sender_id, sender_name, text, chat_type == 1);
+}
+
+void MultiplayerState::HandleVoiceData(uint16_t sender_id, const uint8_t* data, size_t len) {
+	PacketReader reader(data, len);
+	reader.readType(); // skip packet type
+
+	uint16_t pcm_len = reader.readU16();
+	const uint8_t* pcm = reader.readBytes(pcm_len);
+	if (!pcm) return;
+
+	MultiplayerVoice::Instance().OnVoiceDataReceived(sender_id, pcm, pcm_len);
 }
 
 void MultiplayerState::InitAsymMode() {

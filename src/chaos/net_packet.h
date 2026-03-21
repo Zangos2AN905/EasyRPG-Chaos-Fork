@@ -77,6 +77,9 @@ enum class PacketType : uint8_t {
 	GameFileInfo,     // Host -> Client: file_count (u16) + total_bytes (i32)
 	GameFileData,     // Host -> Client: relative_path (str) + is_last (u8) + size (u16) + data
 	GameFileDone,     // Host -> Client: all files transferred
+
+	// Voice chat
+	VoiceData,        // Player -> All: raw audio chunk (unreliable)
 };
 
 // Simple packet buffer for serialization

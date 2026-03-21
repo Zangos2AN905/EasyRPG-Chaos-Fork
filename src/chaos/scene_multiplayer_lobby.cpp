@@ -6,6 +6,7 @@
 #include "chaos/net_manager.h"
 #include "chaos/multiplayer_mode.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/multiplayer_chat.h"
 #include "chaos/discord_integration.h"
 #include "chaos/game_file_transfer.h"
 #include "input.h"
@@ -39,6 +40,66 @@ static constexpr uint16_t RELAY_PORT = 6510;
 // Characters available for name entry
 static const std::string name_chars =
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _-";
+
+static const char* ModerationLevelName(ModerationLevel lv) {
+	switch (lv) {
+		case ModerationLevel::None:     return "None";
+		case ModerationLevel::Basic:    return "Basic";
+		case ModerationLevel::Moderate: return "Moderate";
+		case ModerationLevel::Strict:   return "Strict";
+	}
+	return "Moderate";
+}
+
+static std::vector<std::string> BuildLobbySettingsOptions() {
+	auto& chat = MultiplayerChat::Instance();
+	return {
+		std::string("Chat: ") + (chat.IsChatEnabled() ? "On" : "Off"),
+		std::string("Moderation Type: ") + ModerationLevelName(chat.GetModerationLevel()),
+		std::string("Voice Chat: ") + (chat.IsVoiceEnabled() ? "On" : "Off"),
+		"Max Players: Unlimited",
+		"Allow Late Join: On"
+	};
+}
+
+static std::string GetLobbySettingsDescription(int index) {
+	switch (index) {
+		case 0:
+			return "Toggle chat on or off. Press DECISION to change.";
+		case 1:
+			return "Cycle moderation: None, Basic, Moderate, Strict. Default: Basic.";
+		case 2:
+			return "Toggle voice chat on or off. Press F to toggle mic. Default: Off.";
+		case 3:
+			return "Max players defaults to Unlimited. Not yet implemented.";
+		case 4:
+			return "Late join allows players to enter mid-game. Not yet implemented.";
+		default:
+			return "";
+	}
+}
+
+static void CycleLobbySettingValue(int index) {
+	auto& chat = MultiplayerChat::Instance();
+	switch (index) {
+		case 0: // Chat on/off
+			chat.SetChatEnabled(!chat.IsChatEnabled());
+			break;
+		case 1: { // Moderation level cycle
+			int lv = static_cast<int>(chat.GetModerationLevel());
+			lv = (lv + 1) % 4;
+			chat.SetModerationLevel(static_cast<ModerationLevel>(lv));
+			break;
+		}
+		case 2: // Voice chat on/off
+			chat.SetVoiceEnabled(!chat.IsVoiceEnabled());
+			break;
+		case 3: // Max players — not yet implemented
+		case 4: // Allow late join — not yet implemented
+		default:
+			break;
+	}
+}
 
 Scene_MultiplayerLobby::Scene_MultiplayerLobby() {
 	type = Scene::Settings;
@@ -163,10 +224,20 @@ void Scene_MultiplayerLobby::CreateWindows() {
 		0, 64, Player::screen_width, Player::screen_height - 96);
 	playerlist_window->SetVisible(false);
 
+	settings_window = std::make_unique<Window_Command>(
+		BuildLobbySettingsOptions(),
+		Player::screen_width - (Player::screen_width / 2),
+		5);
+	settings_window->SetX(Player::screen_width / 2);
+	settings_window->SetY(64);
+	settings_window->SetVisible(false);
+	settings_window->SetActive(false);
+	settings_window->SetIndex(0);
+
 	// Start button for host
 	std::vector<std::string> start_options;
 	start_options.push_back("Start Game");
-	start_window = std::make_unique<Window_Command>(start_options, Player::screen_width / 3);
+	start_window = std::make_unique<Window_Command_Horizontal>(start_options, Player::screen_width / 2);
 	start_window->SetX(Player::screen_width / 3);
 	start_window->SetY(Player::screen_height - 32);
 	start_window->SetVisible(false);
@@ -183,6 +254,76 @@ void Scene_MultiplayerLobby::CreateWindows() {
 	browser_info_window = std::make_unique<Window_Help>(
 		0, Player::screen_height - 32, Player::screen_width, 32);
 	browser_info_window->SetVisible(false);
+}
+
+void Scene_MultiplayerLobby::RefreshLobbyActionWindow() {
+	std::vector<std::string> options;
+	if (NetManager::Instance().IsHost()) {
+		options.push_back("Start Game");
+	}
+	options.push_back("Settings");
+
+	int selected = start_window ? start_window->GetIndex() : 0;
+	bool visible = start_window ? start_window->IsVisible() : false;
+
+	start_window = std::make_unique<Window_Command_Horizontal>(options, Player::screen_width / 2);
+	start_window->SetX((Player::screen_width - start_window->GetWidth()) / 2);
+	start_window->SetY(Player::screen_height - start_window->GetHeight());
+	start_window->SetVisible(visible);
+	start_window->SetActive(visible && !settings_open);
+	start_window->SetIndex(std::clamp(selected, 0, static_cast<int>(options.size()) - 1));
+}
+
+void Scene_MultiplayerLobby::RefreshSettingsWindow() {
+	int selected = settings_window ? settings_window->GetIndex() : 0;
+	settings_window = std::make_unique<Window_Command>(
+		BuildLobbySettingsOptions(),
+		Player::screen_width - (Player::screen_width / 2),
+		5);
+	settings_window->SetX(Player::screen_width / 2);
+	settings_window->SetY(64);
+	settings_window->SetVisible(settings_open);
+	settings_window->SetActive(settings_open);
+	settings_window->SetIndex(std::clamp(selected, 0, 4));
+}
+
+std::string Scene_MultiplayerLobby::GetWaitingHelpText() const {
+	auto& net = NetManager::Instance();
+
+	if (settings_open) {
+		return GetLobbySettingsDescription(settings_window ? settings_window->GetIndex() : 0);
+	}
+
+	if (net.IsHost()) {
+		if (net.IsRelay() && net.HasRelayRoomCode()) {
+			return fmt::format("Room Code: {} - Share with friends!", net.GetRelayRoomCode());
+		}
+		return "Waiting for players... Choose Start Game or Settings";
+	}
+
+	if (net.GetLocalPeerId() != 0) {
+		return "Connected to lobby - choose Settings or wait for host";
+	}
+
+	return "Connecting to lobby...";
+}
+
+void Scene_MultiplayerLobby::SetSettingsOpen(bool open) {
+	settings_open = open;
+
+	bool playerlist_visible = playerlist_window ? playerlist_window->IsVisible() : false;
+	int playerlist_width = open ? Player::screen_width / 2 : Player::screen_width;
+	playerlist_window = std::make_unique<Window_Help>(
+		0, 64, playerlist_width, Player::screen_height - 96);
+	playerlist_window->SetVisible(playerlist_visible);
+	RefreshPlayerList();
+
+	RefreshSettingsWindow();
+	if (start_window) {
+		start_window->SetActive(start_window->IsVisible() && !settings_open);
+	}
+
+	help_window->SetText(GetWaitingHelpText());
 }
 
 void Scene_MultiplayerLobby::vUpdate() {
@@ -446,14 +587,23 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 	auto& net = NetManager::Instance();
 	net.Update();
 
-	if (Input::IsTriggered(Input::CANCEL)) {
+	if (settings_open && Input::IsTriggered(Input::CANCEL)) {
+		Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Cancel));
+		SetSettingsOpen(false);
+		return;
+	}
+
+	if (!settings_open && Input::IsTriggered(Input::CANCEL)) {
 		Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Cancel));
 		net.Disconnect();
 		connected = false;
+		settings_open = false;
 		state = LobbyState::HostOrJoin;
 		status_window->SetVisible(false);
 		playerlist_window->SetVisible(false);
 		start_window->SetVisible(false);
+		settings_window->SetVisible(false);
+		settings_window->SetActive(false);
 		hostjoin_window->SetVisible(true);
 		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
 		// Clear Discord multiplayer presence
@@ -475,10 +625,6 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 	}
 
 	if (net.IsHost()) {
-		start_window->Update();
-		if (Input::IsTriggered(Input::DECISION) && start_window->GetActive()) {
-			StartGame();
-		}
 		// Show room code in status for relay mode
 		if (net.IsRelay() && net.HasRelayRoomCode()) {
 			auto& props = GetModeProperties(net.GetMode());
@@ -519,6 +665,41 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 				net.GetLocalPlayerName()));
 		}
 	}
+
+	if (settings_open) {
+		settings_window->Update();
+		help_window->SetText(GetWaitingHelpText());
+		if (Input::IsTriggered(Input::DECISION)) {
+			int idx = settings_window->GetIndex();
+			// Only the host can change settings
+			if (!net.IsHost()) {
+				Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Buzzer));
+			} else if (idx <= 2) {
+				CycleLobbySettingValue(idx);
+				Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Decision));
+			} else {
+				// Not yet implemented
+				Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Buzzer));
+			}
+			RefreshSettingsWindow();
+		}
+		return;
+	}
+
+	if (start_window->IsVisible()) {
+		start_window->Update();
+		if (Input::IsTriggered(Input::DECISION) && start_window->GetActive()) {
+			Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Decision));
+			if (net.IsHost() && start_window->GetIndex() == 0) {
+				StartGame();
+				return;
+			}
+			SetSettingsOpen(true);
+			return;
+		}
+	}
+
+	help_window->SetText(GetWaitingHelpText());
 }
 
 void Scene_MultiplayerLobby::StartHosting() {
@@ -534,15 +715,19 @@ void Scene_MultiplayerLobby::StartHosting() {
 
 	state = LobbyState::Waiting;
 	connected = true;
+	settings_open = false;
 	mode_window->SetVisible(false);
 
 	status_window->SetText(fmt::format("Hosting: {} (port {})", props.name, DEFAULT_PORT));
 	status_window->SetVisible(true);
 	playerlist_window->SetVisible(true);
+	RefreshLobbyActionWindow();
 	start_window->SetVisible(true);
 	start_window->SetActive(true);
+	settings_window->SetVisible(false);
+	settings_window->SetActive(false);
 
-	help_window->SetText("Waiting for players... Press DECISION to start");
+	help_window->SetText(GetWaitingHelpText());
 }
 
 void Scene_MultiplayerLobby::StartJoining() {
@@ -563,11 +748,17 @@ void Scene_MultiplayerLobby::StartJoining() {
 
 	state = LobbyState::Waiting;
 	connect_timer = 0;
+	settings_open = false;
 	ip_window->SetVisible(false);
 
 	status_window->SetText("Connecting...");
 	status_window->SetVisible(true);
 	playerlist_window->SetVisible(true);
+	RefreshLobbyActionWindow();
+	start_window->SetVisible(true);
+	start_window->SetActive(true);
+	settings_window->SetVisible(false);
+	settings_window->SetActive(false);
 
 	help_window->SetText(fmt::format("Connecting to {}...", ip));
 }
@@ -604,10 +795,13 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 		Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Cancel));
 		net.Disconnect();
 		connected = false;
+		settings_open = false;
 		state = LobbyState::HostOrJoin;
 		status_window->SetVisible(false);
 		playerlist_window->SetVisible(false);
 		start_window->SetVisible(false);
+		settings_window->SetVisible(false);
+		settings_window->SetActive(false);
 		hostjoin_window->SetVisible(true);
 		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
 		DiscordIntegration::ClearMultiplayerPresence();
@@ -634,9 +828,13 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 
 			// Transition to main waiting lobby
 			state = LobbyState::Waiting;
+			settings_open = false;
+			RefreshLobbyActionWindow();
 			start_window->SetVisible(true);
 			start_window->SetActive(true);
-			help_window->SetText(fmt::format("Room Code: {} - Share with friends!", code));
+			settings_window->SetVisible(false);
+			settings_window->SetActive(false);
+			help_window->SetText(GetWaitingHelpText());
 		} else if (!net.IsRelayConnected()) {
 			status_window->SetText("Relay connection failed!");
 			help_window->SetText("Failed to connect to relay server");
@@ -658,8 +856,15 @@ void Scene_MultiplayerLobby::UpdateRelayWaiting() {
 				help_window->SetText("Game not found locally - downloading from host");
 			} else {
 				state = LobbyState::Waiting;
+				settings_open = false;
+				RefreshLobbyActionWindow();
+				start_window->SetVisible(true);
+				start_window->SetActive(true);
+				settings_window->SetVisible(false);
+				settings_window->SetActive(false);
 				status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
 					net.GetLocalPlayerName()));
+				help_window->SetText(GetWaitingHelpText());
 			}
 		} else if (!net.IsClient()) {
 			// Join failed or disconnected
@@ -792,11 +997,17 @@ void Scene_MultiplayerLobby::StartRelayHosting() {
 
 	state = LobbyState::RelayWaiting;
 	connected = true;
+	settings_open = false;
 	mode_window->SetVisible(false);
 
 	status_window->SetText("Connecting to relay...");
 	status_window->SetVisible(true);
 	playerlist_window->SetVisible(true);
+	RefreshLobbyActionWindow();
+	start_window->SetVisible(false);
+	start_window->SetActive(false);
+	settings_window->SetVisible(false);
+	settings_window->SetActive(false);
 
 	help_window->SetText("Creating relay room...");
 }
@@ -917,6 +1128,9 @@ void Scene_MultiplayerLobby::UpdateDownloading() {
 		status_window->SetVisible(false);
 		playerlist_window->SetVisible(false);
 		start_window->SetVisible(false);
+		settings_open = false;
+		settings_window->SetVisible(false);
+		settings_window->SetActive(false);
 		hostjoin_window->SetVisible(true);
 		help_window->SetText(fmt::format("Playing as: {}  -  Choose an option", player_name));
 		DiscordIntegration::ClearMultiplayerPresence();
@@ -955,9 +1169,15 @@ void Scene_MultiplayerLobby::UpdateDownloading() {
 
 		// Move to waiting lobby
 		state = LobbyState::Waiting;
+		settings_open = false;
+		RefreshLobbyActionWindow();
+		start_window->SetVisible(true);
+		start_window->SetActive(true);
+		settings_window->SetVisible(false);
+		settings_window->SetActive(false);
 		status_window->SetText(fmt::format("Connected as {} (waiting for host to start)",
 			net.GetLocalPlayerName()));
-		help_window->SetText("Download complete! Waiting for host to start the game");
+		help_window->SetText(GetWaitingHelpText());
 		Output::Debug("Multiplayer: Download complete, switched to host's game");
 		return;
 	}

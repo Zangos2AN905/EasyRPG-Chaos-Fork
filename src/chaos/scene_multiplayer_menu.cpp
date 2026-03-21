@@ -4,6 +4,7 @@
 
 #include "chaos/scene_multiplayer_menu.h"
 #include "chaos/scene_multiplayer_lobby.h"
+#include "chaos/scene_gamemode_select.h"
 #include "editor/scene_editor.h"
 #include "input.h"
 #include "player.h"
@@ -65,13 +66,8 @@ void Scene_MultiplayerMenu::vUpdate() {
 }
 
 void Scene_MultiplayerMenu::OnSingleplayer() {
-	// Pop this menu and proceed to logo/title (replaces this scene on the stack)
-	auto logos = Scene_Logo::LoadLogos();
-	if (!logos.empty()) {
-		Scene::Push(std::make_shared<Scene_Logo>(std::move(logos), 1), true);
-		return;
-	}
-	Scene::Push(std::make_shared<Scene_Title>(), true);
+	// Show game mode selection before proceeding to the game
+	Scene::Push(std::make_shared<Scene_GameModeSelect>());
 }
 
 void Scene_MultiplayerMenu::OnMultiplayer() {

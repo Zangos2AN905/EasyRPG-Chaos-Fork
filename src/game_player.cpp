@@ -45,6 +45,8 @@
 #include "chaos/multiplayer_state.h"
 #include "chaos/net_manager.h"
 #include "chaos/multiplayer_mode.h"
+#include "chaos/undertale_mode.h"
+#include "chaos/game_mode.h"
 
 Game_Player::Game_Player(): Game_PlayerBase(Player)
 {
@@ -75,6 +77,22 @@ Drawable::Z_t Game_Player::GetScreenZ(int x_offset, int y_offset) const {
 	// To ensure this, fake a very high X-coordinate of 65535 (all bits set)
 	// See base function for full explanation of the bitmask
 	return Game_Character::GetScreenZ(x_offset, y_offset) | (0xFFFFu << 16u);
+}
+
+int Game_Player::GetSpriteX() const {
+	auto& ut = Chaos::UndertaleMode::Instance();
+	if (ut.IsActive()) {
+		return ut.GetAbsoluteX();
+	}
+	return Game_Character::GetSpriteX();
+}
+
+int Game_Player::GetSpriteY() const {
+	auto& ut = Chaos::UndertaleMode::Instance();
+	if (ut.IsActive()) {
+		return ut.GetAbsoluteY();
+	}
+	return Game_Character::GetSpriteY();
 }
 
 void Game_Player::ReserveTeleport(int map_id, int x, int y, int direction, TeleportTarget::Type tt) {
@@ -167,6 +185,12 @@ void Game_Player::MoveTo(int map_id, int x, int y) {
 	} else {
 		Game_Map::SetPositionX(GetSpriteX() - GetPanX());
 		Game_Map::SetPositionY(GetSpriteY() - GetPanY());
+	}
+
+	// Re-sync Undertale mode pixel position after teleport/map change
+	auto& ut = Chaos::UndertaleMode::Instance();
+	if (ut.IsActive()) {
+		ut.InitFromPlayer(*this);
 	}
 
 	ResetGraphic();
@@ -316,6 +340,44 @@ void Game_Player::UpdateNextMovementAction() {
 	CheckEventTriggerHere({ lcf::rpg::EventPage::Trigger_collision }, false);
 
 	if (Game_Map::IsAnyEventStarting()) {
+		return;
+	}
+
+	// Undertale mode: pixel-based movement
+	auto& ut = Chaos::UndertaleMode::Instance();
+	if (ut.IsActive()) {
+		bool moved = ut.UpdatePixelMovement(*this);
+
+		// Decision key still triggers events
+		if (Input::IsTriggered(Input::DECISION)) {
+			if (!GetOnOffVehicle()) {
+				CheckActionEvent();
+			}
+		}
+
+		// Check below/above hero layer events at player's tile (Player Touch + Event Touch)
+		if (moved) {
+			CheckEventTriggerHere({ lcf::rpg::EventPage::Trigger_touched, lcf::rpg::EventPage::Trigger_collision }, false);
+		}
+
+		// Check same-layer events at front tile whenever pressing a direction.
+		// Uses GetFacing() which is always cardinal (XwithDirection doesn't handle diagonals).
+		// This mirrors the normal engine: pressing toward a same-layer event triggers it immediately.
+		if (Input::dir4 != 0) {
+			int facing = GetFacing();
+			int front_x = Game_Map::XwithDirection(GetX(), facing);
+			int front_y = Game_Map::YwithDirection(GetY(), facing);
+			CheckEventTriggerThere({ lcf::rpg::EventPage::Trigger_touched, lcf::rpg::EventPage::Trigger_collision }, front_x, front_y, false);
+		}
+
+		// Step counting on tile transitions
+		if (moved && ut.EnteredNewTile()) {
+			Main_Data::game_party->IncSteps();
+			if (Main_Data::game_party->ApplyStateDamage()) {
+				Main_Data::game_screen->FlashMapStepDamage();
+			}
+			UpdateEncounterSteps();
+		}
 		return;
 	}
 
