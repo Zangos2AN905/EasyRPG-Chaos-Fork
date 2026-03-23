@@ -152,6 +152,15 @@ public:
 	int GetLightingPlayerRadius() const { return lighting_player_radius; }
 	void SetLightingPlayerRadius(int v);
 
+	/** Player Skins - custom multiplayer appearance */
+	bool HasSkin() const { return !skin_charset_name.empty(); }
+	const std::string& GetSkinCharsetName() const { return skin_charset_name; }
+	int GetSkinCharIndex() const { return skin_char_index; }
+	void SetSkin(const std::string& charset_name, int char_index, const std::vector<uint8_t>& image_data);
+	void ClearSkin();
+	void BroadcastSkin();
+	const std::vector<uint8_t>& GetSkinImageData() const { return skin_image_data; }
+
 private:
 	MultiplayerState() = default;
 
@@ -184,6 +193,7 @@ private:
 	void HandleAsymKill(const uint8_t* data, size_t len);
 	void HandleChatMessage(uint16_t sender_id, const uint8_t* data, size_t len);
 	void HandleVoiceData(uint16_t sender_id, const uint8_t* data, size_t len);
+	void HandleSkinSet(uint16_t sender_id, const uint8_t* data, size_t len);
 
 	// Sync functions
 	void SendLocalPlayerPosition();
@@ -330,6 +340,13 @@ private:
 	bool lighting_enabled = false;
 	uint8_t lighting_darkness_level = 180;
 	int lighting_player_radius = 80;
+
+	// Player skin state
+	std::string skin_charset_name;
+	int skin_char_index = 0;
+	std::vector<uint8_t> skin_image_data;          // Raw image file bytes (PNG/BMP)
+	bool skin_sent_this_session = false;            // Already broadcast to current peers
+	std::map<uint16_t, std::string> peer_skin_names; // peer_id -> registered cache name
 };
 
 } // namespace Chaos

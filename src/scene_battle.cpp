@@ -39,6 +39,8 @@
 #include "scene_battle.h"
 #include "scene_battle_rpg2k.h"
 #include "scene_battle_rpg2k3.h"
+#include "chaos/scene_battle_undertale.h"
+#include "chaos/game_mode.h"
 #include "scene_gameover.h"
 #include "scene_settings.h"
 #include "scene_debug.h"
@@ -76,6 +78,8 @@ Scene_Battle::~Scene_Battle() {
 }
 
 void Scene_Battle::Start() {
+	Chaos::NotifyCurrentGamemodeBattleStart();
+
 	if (Scene::Find(Scene::Map) == nullptr) {
 		// Battletest mode - need to initialize screen
 		Main_Data::game_screen->InitGraphics();
@@ -518,6 +522,10 @@ void Scene_Battle::AssignSkill(const lcf::rpg::Skill* skill, const lcf::rpg::Ite
 
 std::shared_ptr<Scene_Battle> Scene_Battle::Create(const BattleArgs& args)
 {
+	if (Chaos::IsUndertaleMode()) {
+		return std::make_shared<Chaos::Scene_Battle_Undertale>(args);
+	}
+
 	if (Feature::HasRpg2kBattleSystem()) {
 		return std::make_shared<Scene_Battle_Rpg2k>(args);
 	}
@@ -610,6 +618,7 @@ void Scene_Battle::SelectionFlash(Game_Battler* battler) {
 
 void Scene_Battle::EndBattle(BattleResult result) {
 	assert(Scene::instance.get() == this && "EndBattle called multiple times!");
+	Chaos::NotifyCurrentGamemodeBattleEnd();
 
 	Main_Data::game_party->IncBattleCount();
 	switch (result) {

@@ -103,8 +103,16 @@ void Scene_MultiplayerWait::vUpdate() {
 			for (const auto& member : host_party) {
 				Main_Data::game_party->AddActor(member.actor_id);
 				auto* actor = Main_Data::game_actors->GetActor(member.actor_id);
-				if (actor && actor->GetLevel() != member.level) {
-					actor->ChangeLevel(member.level, nullptr);
+				if (actor) {
+					if (actor->GetLevel() != member.level) {
+						actor->ChangeLevel(member.level, nullptr);
+					}
+					if (member.hp >= 0) {
+						actor->SetHp(member.hp);
+					}
+					if (member.sp >= 0) {
+						actor->SetSp(member.sp);
+					}
 				}
 			}
 		}
@@ -142,6 +150,9 @@ void Scene_MultiplayerWait::vUpdate() {
 				if (actor) {
 					Main_Data::game_player->SetSpriteGraphic(
 						std::string(actor->GetSpriteName()), actor->GetSpriteIndex());
+					if (MultiplayerState::Instance().HasSkin()) {
+						Main_Data::game_player->SetSpriteGraphic("__skin_local", MultiplayerState::Instance().GetSkinCharIndex());
+					}
 					Output::Debug("Multiplayer: Team mode - using actor {} ({})",
 						actor->GetId(), std::string(actor->GetSpriteName()));
 				}

@@ -25,7 +25,6 @@ private:
 	void CreateWindows();
 	void OnSingleplayer();
 	void OnMultiplayer();
-	void OnEditor();
 
 	std::unique_ptr<Window_Help> help_window;
 	std::unique_ptr<Window_Command> command_window;

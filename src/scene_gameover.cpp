@@ -24,6 +24,10 @@
 #include "main_data.h"
 #include "transition.h"
 #include "player.h"
+#include "audio.h"
+#include "filefinder.h"
+#include "output.h"
+#include "chaos/game_mode.h"
 
 Scene_Gameover::Scene_Gameover() {
 	type = Scene::Gameover;
@@ -36,8 +40,21 @@ void Scene_Gameover::Start() {
 		request_id = request->Bind(&Scene_Gameover::OnBackgroundReady, this);
 		request->Start();
 	}
+
 	// Play gameover music
-	Main_Data::game_system->BgmPlay(Main_Data::game_system->GetSystemBGM(Main_Data::game_system->BGM_GameOver));
+	if (Chaos::IsUndertaleMode()) {
+		auto chaos_fs = FileFinder::ChaosAssets();
+		if (chaos_fs) {
+			auto stream = chaos_fs.OpenFile("UndertaleMode.content/Music", "GameOverMIDI", FileFinder::MUSIC_TYPES);
+			if (stream) {
+				Audio().BGM_Play(std::move(stream), 100, 100, 0, 50);
+			} else {
+				Output::Debug("Gameover: Could not find GameOverMIDI");
+			}
+		}
+	} else {
+		Main_Data::game_system->BgmPlay(Main_Data::game_system->GetSystemBGM(Main_Data::game_system->BGM_GameOver));
+	}
 }
 
 void Scene_Gameover::vUpdate() {

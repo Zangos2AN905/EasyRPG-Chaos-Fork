@@ -80,6 +80,9 @@ enum class PacketType : uint8_t {
 
 	// Voice chat
 	VoiceData,        // Player -> All: raw audio chunk (unreliable)
+
+	// Player skins
+	SkinSet,          // Player -> All: skin charset data (name, index, image bytes)
 };
 
 // Simple packet buffer for serialization

@@ -35,6 +35,9 @@ public:
 
 	void Update();
 
+	/** Hide or show the battle background drawable */
+	void SetBackgroundVisible(bool visible);
+
 protected:
 	std::unique_ptr<Background> background;
 	std::vector<Sprite_Battler*> sprites;

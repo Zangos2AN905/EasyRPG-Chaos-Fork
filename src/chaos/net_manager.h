@@ -33,6 +33,8 @@ struct PeerInfo {
 struct HostPartyMember {
 	uint16_t actor_id = 0;
 	int32_t level = 1;
+	int32_t hp = -1;
+	int32_t sp = -1;
 };
 
 class NetManager {

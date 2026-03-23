@@ -481,6 +481,8 @@ void NetManager::HandleClientEvent(ENetEvent& event) {
 					HostPartyMember m;
 					m.actor_id = reader.readU16();
 					m.level = reader.readI32();
+					m.hp = reader.readI32();
+					m.sp = reader.readI32();
 					host_party.push_back(m);
 				}
 				host_map_ready = true;
@@ -841,6 +843,8 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 				HostPartyMember m;
 				m.actor_id = reader.readU16();
 				m.level = reader.readI32();
+				m.hp = reader.readI32();
+				m.sp = reader.readI32();
 				host_party.push_back(m);
 			}
 			host_map_ready = true;

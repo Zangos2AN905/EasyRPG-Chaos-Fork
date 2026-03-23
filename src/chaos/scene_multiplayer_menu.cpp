@@ -5,11 +5,9 @@
 #include "chaos/scene_multiplayer_menu.h"
 #include "chaos/scene_multiplayer_lobby.h"
 #include "chaos/scene_gamemode_select.h"
-#include "editor/scene_editor.h"
+#include "chaos/mod_loader.h"
 #include "input.h"
 #include "player.h"
-#include "scene_logo.h"
-#include "scene_title.h"
 #include "scene.h"
 #include "game_system.h"
 #include "main_data.h"
@@ -22,6 +20,7 @@ Scene_MultiplayerMenu::Scene_MultiplayerMenu() {
 }
 
 void Scene_MultiplayerMenu::Start() {
+	ModLoader::Instance().EnsureLoaded();
 	CreateWindows();
 	Game_Clock::ResetFrame(Game_Clock::now());
 }
@@ -33,7 +32,6 @@ void Scene_MultiplayerMenu::CreateWindows() {
 	std::vector<std::string> options;
 	options.push_back("Singleplayer");
 	options.push_back("Multiplayer");
-	options.push_back("Editor");
 
 	command_window = std::make_unique<Window_Command>(options, Player::screen_width / 2);
 	command_window->SetX(Player::screen_width / 4);
@@ -58,9 +56,6 @@ void Scene_MultiplayerMenu::vUpdate() {
 			case 1:
 				OnMultiplayer();
 				break;
-			case 2:
-				OnEditor();
-				break;
 		}
 	}
 }
@@ -72,18 +67,6 @@ void Scene_MultiplayerMenu::OnSingleplayer() {
 
 void Scene_MultiplayerMenu::OnMultiplayer() {
 	Scene::Push(std::make_shared<Scene_MultiplayerLobby>());
-}
-
-void Scene_MultiplayerMenu::OnEditor() {
-	// Start game in singleplayer first, then open editor
-	auto logos = Scene_Logo::LoadLogos();
-	if (!logos.empty()) {
-		Scene::Push(std::make_shared<Scene_Logo>(std::move(logos), 1), true);
-	} else {
-		Scene::Push(std::make_shared<Scene_Title>(), true);
-	}
-	// Editor will be opened via key 7 once in-game, or we push it after title
-	Editor::editor_requested = true;
 }
 
 } // namespace Chaos

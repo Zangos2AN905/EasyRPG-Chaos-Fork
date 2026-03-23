@@ -527,6 +527,8 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/scene_multiplayer_lobby.h
 	src/chaos/scene_multiplayer_wait.cpp
 	src/chaos/scene_multiplayer_wait.h
+	src/chaos/scene_skin_select.cpp
+	src/chaos/scene_skin_select.h
 	src/chaos/game_file_transfer.cpp
 	src/chaos/game_file_transfer.h
 	src/chaos/scene_god_mode.cpp
@@ -535,6 +537,40 @@ add_library(${PROJECT_NAME} OBJECT
 	src/chaos/game_mode.cpp
 	src/chaos/undertale_mode.h
 	src/chaos/undertale_mode.cpp
+	src/chaos/undertale_battle_ui.h
+	src/chaos/undertale_battle_ui.cpp
+	src/chaos/undertale_fight_bar.h
+	src/chaos/undertale_fight_bar.cpp
+	src/chaos/undertale_font.h
+	src/chaos/undertale_font.cpp
+	src/chaos/undertale_dialogue.h
+	src/chaos/undertale_dialogue.cpp
+	src/chaos/undertale_choice.h
+	src/chaos/undertale_choice.cpp
+	src/chaos/undertale_stats_bar.h
+	src/chaos/undertale_stats_bar.cpp
+	src/chaos/undertale_enemy_graphic.h
+	src/chaos/undertale_enemy_graphic.cpp
+	src/chaos/undertale_bullet.h
+	src/chaos/undertale_bullet.cpp
+	src/chaos/undertale_damage.h
+	src/chaos/undertale_damage.cpp
+	src/chaos/mod_api.h
+	src/chaos/mod_api.cpp
+	src/chaos/mod_script_engine.h
+	src/chaos/mod_angelscript.h
+	src/chaos/mod_angelscript.cpp
+	src/chaos/as_string_addon.cpp
+	src/chaos/mod_lua.h
+	src/chaos/mod_lua.cpp
+	src/chaos/mod_loader.h
+	src/chaos/mod_loader.cpp
+	src/chaos/mod_scripted_pattern.h
+	src/chaos/mod_scripted_pattern.cpp
+	src/chaos/scene_mod_menu.h
+	src/chaos/scene_mod_menu.cpp
+	src/chaos/scene_battle_undertale.h
+	src/chaos/scene_battle_undertale.cpp
 	src/chaos/scene_gamemode_select.h
 	src/chaos/scene_gamemode_select.cpp
 	src/editor/scene_editor.cpp
@@ -981,6 +1017,50 @@ else()
 		REQUIRED)
 endif()
 
+# ICU — required by liblcf for encoding detection
+find_package(ICU COMPONENTS uc i18n data)
+if(ICU_FOUND)
+	target_link_libraries(${PROJECT_NAME} ICU::uc ICU::i18n ICU::data)
+	message(STATUS "ICU: ${ICU_LIBRARIES}")
+else()
+	# Fallback: try manual find (vcpkg static builds)
+	find_library(ICU_UC_LIB NAMES icuuc HINTS "${CMAKE_PREFIX_PATH}"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/lib"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows-static/lib")
+	find_library(ICU_IN_LIB NAMES icuin icui18n HINTS "${CMAKE_PREFIX_PATH}"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/lib"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows-static/lib")
+	find_library(ICU_DT_LIB NAMES icudt icudata HINTS "${CMAKE_PREFIX_PATH}"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/lib"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows-static/lib")
+	if(ICU_UC_LIB)
+		target_link_libraries(${PROJECT_NAME} ${ICU_UC_LIB})
+		if(ICU_IN_LIB)
+			target_link_libraries(${PROJECT_NAME} ${ICU_IN_LIB})
+		endif()
+		if(ICU_DT_LIB)
+			target_link_libraries(${PROJECT_NAME} ${ICU_DT_LIB})
+		endif()
+		find_path(ICU_INCLUDE_DIR unicode/ucsdet.h HINTS "${CMAKE_PREFIX_PATH}"
+			"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/include"
+			"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/include"
+			"c:/vcpkg/installed/x64-windows/include"
+			"c:/vcpkg/installed/x64-windows-static/include")
+		if(ICU_INCLUDE_DIR)
+			target_include_directories(${PROJECT_NAME} PRIVATE ${ICU_INCLUDE_DIR})
+		endif()
+		message(STATUS "ICU (manual): ${ICU_UC_LIB}")
+	else()
+		message(WARNING "ICU not found — liblcf encoding detection may fail to link")
+	endif()
+endif()
+
 # Detect all required libraries
 # PNG pulls in zlib which has a broken config when not both static and shared library are installed
 player_find_package(NAME PNG TARGET PNG::PNG REQUIRED CONFIG_BROKEN)
@@ -1024,6 +1104,56 @@ endif()
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows"
 	AND NOT PLAYER_CONSOLE_PORT)
 	target_compile_definitions(${PROJECT_NAME} PUBLIC HAVE_WINE=1)
+endif()
+
+# Chaos Fork: AngelScript for modding (optional)
+find_library(ANGELSCRIPT_LIBRARY angelscript HINTS "${CMAKE_PREFIX_PATH}"
+	"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/lib"
+	"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib"
+	"c:/vcpkg/installed/x64-windows/lib")
+if(ANGELSCRIPT_LIBRARY)
+	target_link_libraries(${PROJECT_NAME} ${ANGELSCRIPT_LIBRARY})
+	find_path(ANGELSCRIPT_INCLUDE_DIR angelscript.h HINTS "${CMAKE_PREFIX_PATH}"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/include"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/include"
+		"c:/vcpkg/installed/x64-windows/include")
+	if(ANGELSCRIPT_INCLUDE_DIR)
+		target_include_directories(${PROJECT_NAME} PRIVATE ${ANGELSCRIPT_INCLUDE_DIR})
+	endif()
+	target_compile_definitions(${PROJECT_NAME} PUBLIC CHAOS_HAS_ANGELSCRIPT=1)
+	message(STATUS "AngelScript: ${ANGELSCRIPT_LIBRARY}")
+else()
+	message(STATUS "AngelScript not found — AngelScript mod support disabled")
+endif()
+
+# Chaos Fork: Lua for modding (optional)
+find_package(Lua QUIET)
+if(LUA_FOUND)
+	target_link_libraries(${PROJECT_NAME} ${LUA_LIBRARIES})
+	target_include_directories(${PROJECT_NAME} PRIVATE ${LUA_INCLUDE_DIR})
+	target_compile_definitions(${PROJECT_NAME} PUBLIC CHAOS_HAS_LUA=1)
+	message(STATUS "Lua: ${LUA_LIBRARIES}")
+else()
+	# Try manual find as fallback
+	find_library(LUA_LIBRARY NAMES lua lua54 lua53 lua5.4 lua5.3 HINTS "${CMAKE_PREFIX_PATH}"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/lib"
+		"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/lib"
+		"c:/vcpkg/installed/x64-windows/lib")
+	if(LUA_LIBRARY)
+		target_link_libraries(${PROJECT_NAME} ${LUA_LIBRARY})
+		find_path(LUA_INCLUDE_PATH lua.h HINTS "${CMAKE_PREFIX_PATH}"
+			"$ENV{VCPKG_INSTALLED_DIR}/x64-windows-static/include"
+			"$ENV{VCPKG_INSTALLED_DIR}/x64-windows/include"
+			"c:/vcpkg/installed/x64-windows/include"
+			PATH_SUFFIXES lua lua5.4 lua5.3)
+		if(LUA_INCLUDE_PATH)
+			target_include_directories(${PROJECT_NAME} PRIVATE ${LUA_INCLUDE_PATH})
+		endif()
+		target_compile_definitions(${PROJECT_NAME} PUBLIC CHAOS_HAS_LUA=1)
+		message(STATUS "Lua: ${LUA_LIBRARY}")
+	else()
+		message(STATUS "Lua not found — Lua mod support disabled")
+	endif()
 endif()
 
 # freetype and harfbuzz

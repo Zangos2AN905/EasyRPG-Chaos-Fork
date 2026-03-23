@@ -9,6 +9,7 @@
 #include "chaos/net_manager.h"
 #include "game_player.h"
 #include "game_map.h"
+#include "game_event.h"
 #include "game_message.h"
 #include "game_character.h"
 #include "input.h"
@@ -120,6 +121,15 @@ void UndertaleMode::UpdateScroll(Game_Player& player) {
 bool UndertaleMode::UpdatePixelMovement(Game_Player& player) {
 	if (!initialized) {
 		InitFromPlayer(player);
+	}
+
+	// If the player's tile position was changed externally (e.g. by a move route
+	// or Set Location), sync the pixel position from the new tile position.
+	int expected_tile_x = Game_Map::RoundX(abs_x / SCREEN_TILE_SIZE);
+	int expected_tile_y = Game_Map::RoundY(abs_y / SCREEN_TILE_SIZE);
+	if (player.GetX() != expected_tile_x || player.GetY() != expected_tile_y) {
+		abs_x = player.GetX() * SCREEN_TILE_SIZE;
+		abs_y = player.GetY() * SCREEN_TILE_SIZE;
 	}
 
 	// Reset per-frame tracking
@@ -236,44 +246,26 @@ bool UndertaleMode::UpdatePixelMovement(Game_Player& player) {
 	int orig_abs_x = abs_x;
 	int orig_abs_y = abs_y;
 
-	// Apply X movement
+	// Apply X movement — stop at tile edge without snapping
 	if (can_move_x) {
 		abs_x = new_abs_x;
 	} else if (dx != 0) {
-		// Tile crossing blocked: snap to tile-aligned position
-		abs_x = old_tile_x * SCREEN_TILE_SIZE;
-	}
-
-	// Ahead-of-time clamping for X: if the next tile in the movement direction
-	// is impassable, snap to tile-aligned position so the player sprite never
-	// visually overlaps with blocked tiles or events.
-	if (dx != 0) {
-		int cur_tx = (abs_x >= 0) ? abs_x / SCREEN_TILE_SIZE
-		                          : (abs_x - SCREEN_TILE_SIZE + 1) / SCREEN_TILE_SIZE;
-		int ahead_tx = Game_Map::RoundX(cur_tx + (dx > 0 ? 1 : -1));
-		if (!CanMoveTo(player, Game_Map::RoundX(cur_tx), Game_Map::RoundY(old_tile_y),
-		               ahead_tx, Game_Map::RoundY(old_tile_y))) {
-			abs_x = cur_tx * SCREEN_TILE_SIZE;
+		// Stop at the edge of the current tile without snapping
+		if (dx > 0) {
+			abs_x = (old_tile_x + 1) * SCREEN_TILE_SIZE - 1;
+		} else {
+			abs_x = old_tile_x * SCREEN_TILE_SIZE;
 		}
 	}
 
-	// Apply Y movement
+	// Apply Y movement — stop at tile edge without snapping
 	if (can_move_y) {
 		abs_y = new_abs_y;
 	} else if (dy != 0) {
-		abs_y = old_tile_y * SCREEN_TILE_SIZE;
-	}
-
-	// Ahead-of-time clamping for Y (uses updated X tile position)
-	if (dy != 0) {
-		int cur_ty = (abs_y >= 0) ? abs_y / SCREEN_TILE_SIZE
-		                          : (abs_y - SCREEN_TILE_SIZE + 1) / SCREEN_TILE_SIZE;
-		int cur_tx = (abs_x >= 0) ? abs_x / SCREEN_TILE_SIZE
-		                          : (abs_x - SCREEN_TILE_SIZE + 1) / SCREEN_TILE_SIZE;
-		int ahead_ty = Game_Map::RoundY(cur_ty + (dy > 0 ? 1 : -1));
-		if (!CanMoveTo(player, Game_Map::RoundX(cur_tx), Game_Map::RoundY(cur_ty),
-		               Game_Map::RoundX(cur_tx), ahead_ty)) {
-			abs_y = cur_ty * SCREEN_TILE_SIZE;
+		if (dy > 0) {
+			abs_y = (old_tile_y + 1) * SCREEN_TILE_SIZE - 1;
+		} else {
+			abs_y = old_tile_y * SCREEN_TILE_SIZE;
 		}
 	}
 
@@ -315,6 +307,42 @@ bool UndertaleMode::UpdatePixelMovement(Game_Player& player) {
 	UpdateScroll(player);
 
 	return moved;
+}
+
+bool UndertaleMode::CheckEventHitbox(Game_Player& player) const {
+	// Player hitbox: centered on abs_x/abs_y, roughly half-tile (8px = 128 units)
+	constexpr int half_hitbox = SCREEN_TILE_SIZE / 2; // 128 units = 8px
+	int px1 = abs_x;
+	int py1 = abs_y;
+	int px2 = abs_x + SCREEN_TILE_SIZE - 1;
+	int py2 = abs_y + SCREEN_TILE_SIZE - 1;
+
+	bool result = false;
+	for (auto& ev : Game_Map::GetEvents()) {
+		if (!ev.IsActive()) continue;
+		const auto trigger = ev.GetTrigger();
+		if (trigger != lcf::rpg::EventPage::Trigger_touched &&
+		    trigger != lcf::rpg::EventPage::Trigger_collision) {
+			continue;
+		}
+
+		// Event hitbox: full tile at event position
+		int ex1 = ev.GetX() * SCREEN_TILE_SIZE;
+		int ey1 = ev.GetY() * SCREEN_TILE_SIZE;
+		int ex2 = ex1 + SCREEN_TILE_SIZE - 1;
+		int ey2 = ey1 + SCREEN_TILE_SIZE - 1;
+
+		// AABB overlap check
+		if (px1 <= ex2 && px2 >= ex1 && py1 <= ey2 && py2 >= ey1) {
+			if (ev.GetLayer() != lcf::rpg::EventPage::Layers_same) {
+				// Below/above hero: trigger on overlap
+				if (ev.ScheduleForegroundExecution(false, false)) {
+					result = true;
+				}
+			}
+		}
+	}
+	return result;
 }
 
 } // namespace Chaos

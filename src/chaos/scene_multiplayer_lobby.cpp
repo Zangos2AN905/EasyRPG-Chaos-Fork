@@ -8,6 +8,7 @@
 #include "chaos/multiplayer_state.h"
 #include "chaos/multiplayer_chat.h"
 #include "chaos/discord_integration.h"
+#include "chaos/scene_skin_select.h"
 #include "chaos/game_file_transfer.h"
 #include "input.h"
 #include "player.h"
@@ -262,6 +263,7 @@ void Scene_MultiplayerLobby::RefreshLobbyActionWindow() {
 		options.push_back("Start Game");
 	}
 	options.push_back("Settings");
+	options.push_back("Skins");
 
 	int selected = start_window ? start_window->GetIndex() : 0;
 	bool visible = start_window ? start_window->IsVisible() : false;
@@ -690,12 +692,24 @@ void Scene_MultiplayerLobby::UpdateWaiting() {
 		start_window->Update();
 		if (Input::IsTriggered(Input::DECISION) && start_window->GetActive()) {
 			Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Decision));
-			if (net.IsHost() && start_window->GetIndex() == 0) {
+			int idx = start_window->GetIndex();
+
+			// Determine which button was pressed based on layout:
+			// Host:   [Start Game] [Settings] [Skins]
+			// Client: [Settings] [Skins]
+			int settings_idx = net.IsHost() ? 1 : 0;
+			int skins_idx = net.IsHost() ? 2 : 1;
+
+			if (net.IsHost() && idx == 0) {
 				StartGame();
 				return;
+			} else if (idx == settings_idx) {
+				SetSettingsOpen(true);
+				return;
+			} else if (idx == skins_idx) {
+				Scene::Push(std::make_shared<Scene_SkinSelect>());
+				return;
 			}
-			SetSettingsOpen(true);
-			return;
 		}
 	}
 

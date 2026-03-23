@@ -43,6 +43,8 @@
 
 namespace Chaos {
 
+static constexpr const char* kLocalSkinCacheName = "__skin_local";
+
 MultiplayerState& MultiplayerState::Instance() {
 	static MultiplayerState instance;
 	return instance;
@@ -85,6 +87,11 @@ void MultiplayerState::StopMultiplayer() {
 	last_switches.clear();
 	last_variables.clear();
 	current_spriteset = nullptr;
+	skin_sent_this_session = false;
+	for (auto& [id, name] : peer_skin_names) {
+		Cache::UnregisterCharset(name);
+	}
+	peer_skin_names.clear();
 	DiscordIntegration::ClearMultiplayerPresence();
 	Output::Debug("Multiplayer: State manager stopped");
 }
@@ -127,6 +134,11 @@ void MultiplayerState::Update() {
 
 	// Send local player position periodically (skip if spectating — we're dead)
 	if (!spectating) {
+		// Broadcast skin data once per session when first on a map
+		if (HasSkin() && !skin_sent_this_session) {
+			BroadcastSkin();
+		}
+
 		position_send_counter++;
 		if (position_send_counter >= POSITION_SEND_INTERVAL) {
 			position_send_counter = 0;
@@ -209,6 +221,16 @@ void MultiplayerState::Update() {
 void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 	current_spriteset = spriteset;
 
+	if (HasSkin() && !skin_image_data.empty()) {
+		BitmapRef bmp = Bitmap::Create(skin_image_data.data(), static_cast<unsigned>(skin_image_data.size()), true);
+		if (bmp) {
+			Cache::RegisterCharset(kLocalSkinCacheName, bmp);
+		}
+		if (Main_Data::game_player) {
+			Main_Data::game_player->SetSpriteGraphic(kLocalSkinCacheName, skin_char_index);
+		}
+	}
+
 	// Create sprites for all remote players that are on this map
 	for (auto& [id, player] : remote_players) {
 		if (player && player->IsOnCurrentMap()) {
@@ -268,6 +290,8 @@ void MultiplayerState::OnMapLoaded(Spriteset_Map* spriteset) {
 				if (!actor) continue;
 				pw.write(static_cast<uint16_t>(actor->GetId()));
 				pw.write(static_cast<int32_t>(actor->GetLevel()));
+				pw.write(static_cast<int32_t>(actor->GetHp()));
+				pw.write(static_cast<int32_t>(actor->GetSp()));
 			}
 
 			net.Broadcast(pw, true);
@@ -349,11 +373,11 @@ void MultiplayerState::OnPlayerConnected(uint16_t peer_id) {
 		PacketWriter gs(PacketType::GameStart);
 		net.SendTo(peer_id, gs, true);
 
-		// Send HostMapReady with current map position
+		// Send HostMapReady with position near host (offset +1 tile)
 		auto* hero = Main_Data::game_player.get();
 		if (hero) {
 			int map_id = Game_Map::GetMapId();
-			int x = hero->GetX();
+			int x = hero->GetX() + 1;
 			int y = hero->GetY();
 
 			PacketWriter pw(PacketType::HostMapReady);
@@ -369,6 +393,8 @@ void MultiplayerState::OnPlayerConnected(uint16_t peer_id) {
 				if (!actor) continue;
 				pw.write(static_cast<uint16_t>(actor->GetId()));
 				pw.write(static_cast<int32_t>(actor->GetLevel()));
+				pw.write(static_cast<int32_t>(actor->GetHp()));
+				pw.write(static_cast<int32_t>(actor->GetSp()));
 			}
 
 			net.SendTo(peer_id, pw, true);
@@ -398,11 +424,30 @@ void MultiplayerState::OnPlayerConnected(uint16_t peer_id) {
 			Output::Debug("Multiplayer: Sent game state to late joiner peer {}", peer_id);
 		}
 	}
+
+	// Send our skin to the new player if we have one
+	if (HasSkin() && !skin_image_data.empty()) {
+		PacketWriter skin_pw(PacketType::SkinSet);
+		skin_pw.write(net.GetLocalPeerId());
+		skin_pw.write(skin_charset_name);
+		skin_pw.write(static_cast<int32_t>(skin_char_index));
+		skin_pw.write(static_cast<int32_t>(skin_image_data.size()));
+		skin_pw.writeBytes(skin_image_data.data(), skin_image_data.size());
+		net.SendTo(peer_id, skin_pw, true);
+	}
 }
 
 void MultiplayerState::OnPlayerDisconnected(uint16_t peer_id) {
 	RemoveRemotePlayerSprite(peer_id);
 	remote_players.erase(peer_id);
+
+	// Clean up peer's skin from cache
+	auto skin_it = peer_skin_names.find(peer_id);
+	if (skin_it != peer_skin_names.end()) {
+		Cache::UnregisterCharset(skin_it->second);
+		peer_skin_names.erase(skin_it);
+	}
+
 	Output::Debug("Multiplayer: Removed remote player for peer {}", peer_id);
 
 	// If we were spectating the disconnected player, switch target
@@ -485,6 +530,9 @@ void MultiplayerState::OnPacketReceived(uint16_t sender_id, const uint8_t* data,
 			break;
 		case PacketType::VoiceData:
 			HandleVoiceData(sender_id, data, len);
+			break;
+		case PacketType::SkinSet:
+			HandleSkinSet(sender_id, data, len);
 			break;
 		default:
 			break;
@@ -758,6 +806,17 @@ void MultiplayerState::SendLocalPlayerPosition() {
 
 	auto* player = Main_Data::game_player.get();
 
+	// Override sprite with skin if set
+	std::string sprite_name;
+	int32_t sprite_index;
+	if (HasSkin()) {
+		sprite_name = "__skin_" + std::to_string(net.GetLocalPeerId());
+		sprite_index = skin_char_index;
+	} else {
+		sprite_name = player->GetSpriteName().empty() ? std::string("") : std::string(player->GetSpriteName());
+		sprite_index = player->GetSpriteIndex();
+	}
+
 	PacketWriter packet(PacketType::PlayerPosition);
 	packet.write(net.GetLocalPeerId());
 	packet.write(static_cast<int32_t>(Game_Map::GetMapId()));
@@ -765,8 +824,8 @@ void MultiplayerState::SendLocalPlayerPosition() {
 	packet.write(static_cast<int32_t>(player->GetY()));
 	packet.write(static_cast<int32_t>(player->GetDirection()));
 	packet.write(static_cast<int32_t>(player->GetFacing()));
-	packet.write(player->GetSpriteName().empty() ? std::string("") : std::string(player->GetSpriteName()));
-	packet.write(static_cast<int32_t>(player->GetSpriteIndex()));
+	packet.write(sprite_name);
+	packet.write(sprite_index);
 
 	if (net.IsHost()) {
 		net.Broadcast(packet, false); // Unreliable for position updates
@@ -989,6 +1048,13 @@ void MultiplayerState::UpdateSpectator() {
 // ---- Battle sync ----
 
 void MultiplayerState::OnBattleStarted(int troop_id, int terrain_id, bool first_strike, bool allow_escape) {
+	auto& net = NetManager::Instance();
+	auto mode = net.GetMode();
+	// Only sync battles in TeamParty and Chaotix modes
+	if (mode != MultiplayerMode::TeamParty && mode != MultiplayerMode::Chaotix) {
+		return;
+	}
+
 	in_battle = true;
 	battle_troop_id = troop_id;
 	battle_terrain_id = terrain_id;
@@ -1003,7 +1069,6 @@ void MultiplayerState::OnBattleStarted(int troop_id, int terrain_id, bool first_
 	battle_seed = Rand::GetRandomNumber(0, 0x7FFFFFFF);
 	Rand::SeedRandomNumberGenerator(battle_seed);
 
-	auto& net = NetManager::Instance();
 	PacketWriter pw(PacketType::BattleStart);
 	pw.write(net.GetLocalPeerId());
 	pw.write(static_cast<int32_t>(troop_id));
@@ -1016,7 +1081,6 @@ void MultiplayerState::OnBattleStarted(int troop_id, int terrain_id, bool first_
 		net.Broadcast(pw, true);
 
 		// In Chaotix mode, also force others into battle
-		auto mode = net.GetMode();
 		if (mode == MultiplayerMode::Chaotix) {
 			PacketWriter fpw(PacketType::BattleForce);
 			fpw.write(static_cast<int32_t>(troop_id));
@@ -1034,6 +1098,13 @@ void MultiplayerState::OnBattleStarted(int troop_id, int terrain_id, bool first_
 }
 
 void MultiplayerState::OnBattleEnded(int result) {
+	auto& net = NetManager::Instance();
+	auto mode = net.GetMode();
+	// Only sync battles in TeamParty and Chaotix modes
+	if (mode != MultiplayerMode::TeamParty && mode != MultiplayerMode::Chaotix) {
+		return;
+	}
+
 	in_battle = false;
 	remote_battle_actions.clear();
 	turn_sync_received = false;
@@ -1044,7 +1115,6 @@ void MultiplayerState::OnBattleEnded(int result) {
 	remote_battle_ended = false;
 	remote_battle_result = 0;
 
-	auto& net = NetManager::Instance();
 	PacketWriter pw(PacketType::BattleEnd);
 	pw.write(net.GetLocalPeerId());
 	pw.write(static_cast<uint8_t>(result));
@@ -1059,6 +1129,13 @@ void MultiplayerState::OnBattleEnded(int result) {
 }
 
 void MultiplayerState::HandleBattleStart(uint16_t sender_id, const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	auto mode = net.GetMode();
+	// Only sync battles in TeamParty and Chaotix modes
+	if (mode != MultiplayerMode::TeamParty && mode != MultiplayerMode::Chaotix) {
+		return;
+	}
+
 	PacketReader reader(data, len);
 	reader.readType();
 
@@ -1068,8 +1145,6 @@ void MultiplayerState::HandleBattleStart(uint16_t sender_id, const uint8_t* data
 	uint8_t first_strike = reader.readU8();
 	uint8_t allow_escape = reader.readU8();
 	int32_t seed = reader.readI32();
-
-	auto& net = NetManager::Instance();
 
 	// If host, relay to other clients (with seed)
 	if (net.IsHost()) {
@@ -1083,7 +1158,6 @@ void MultiplayerState::HandleBattleStart(uint16_t sender_id, const uint8_t* data
 		net.Broadcast(rpw, true);
 
 		// In Chaotix mode, force all into battle
-		auto mode = net.GetMode();
 		if (mode == MultiplayerMode::Chaotix) {
 			PacketWriter fpw(PacketType::BattleForce);
 			fpw.write(troop_id);
@@ -1103,7 +1177,6 @@ void MultiplayerState::HandleBattleStart(uint16_t sender_id, const uint8_t* data
 	battle_seed = seed;
 	Rand::SeedRandomNumberGenerator(battle_seed);
 
-	auto mode = net.GetMode();
 	if (mode == MultiplayerMode::TeamParty) {
 		// Team mode: show invite prompt
 		if (!in_battle) {
@@ -1126,6 +1199,13 @@ void MultiplayerState::HandleBattleJoin(uint16_t sender_id, const uint8_t* data,
 }
 
 void MultiplayerState::HandleBattleForce(const uint8_t* data, size_t len) {
+	auto& net = NetManager::Instance();
+	auto mode = net.GetMode();
+	// BattleForce is only used in Chaotix mode
+	if (mode != MultiplayerMode::Chaotix) {
+		return;
+	}
+
 	PacketReader reader(data, len);
 	reader.readType();
 
@@ -2625,6 +2705,115 @@ void MultiplayerState::AsymCheckHunterCollision() {
 			net.Broadcast(packet, true);
 			return;
 		}
+	}
+}
+
+// ==================== Player Skins ====================
+
+void MultiplayerState::SetSkin(const std::string& charset_name, int char_index, const std::vector<uint8_t>& image_data) {
+	skin_charset_name = charset_name;
+	skin_char_index = char_index;
+	skin_image_data = image_data;
+	skin_sent_this_session = false;
+
+	// Register in cache for local rendering
+	if (!image_data.empty()) {
+		BitmapRef bmp = Bitmap::Create(image_data.data(), static_cast<unsigned>(image_data.size()), true);
+		if (bmp) {
+			Cache::RegisterCharset(kLocalSkinCacheName, bmp);
+			Output::Debug("Skin: Registered local skin '{}' index {} as '{}'", charset_name, char_index, kLocalSkinCacheName);
+		}
+	}
+
+	if (Main_Data::game_player) {
+		Main_Data::game_player->SetSpriteGraphic(kLocalSkinCacheName, skin_char_index);
+	}
+}
+
+void MultiplayerState::ClearSkin() {
+	if (!skin_charset_name.empty()) {
+		Cache::UnregisterCharset(kLocalSkinCacheName);
+	}
+	skin_charset_name.clear();
+	skin_char_index = 0;
+	skin_image_data.clear();
+	skin_sent_this_session = false;
+	if (Main_Data::game_player) {
+		Main_Data::game_player->ResetGraphic();
+	}
+}
+
+void MultiplayerState::BroadcastSkin() {
+	if (!active || skin_image_data.empty()) return;
+
+	auto& net = NetManager::Instance();
+	PacketWriter packet(PacketType::SkinSet);
+	packet.write(net.GetLocalPeerId());
+	packet.write(skin_charset_name);
+	packet.write(static_cast<int32_t>(skin_char_index));
+	packet.write(static_cast<int32_t>(skin_image_data.size()));
+	packet.writeBytes(skin_image_data.data(), skin_image_data.size());
+
+	if (net.IsHost()) {
+		net.Broadcast(packet, true);
+	} else {
+		net.SendToServer(packet, true);
+	}
+	skin_sent_this_session = true;
+	Output::Debug("Skin: Broadcast skin '{}' index {} ({} bytes)", skin_charset_name, skin_char_index, skin_image_data.size());
+}
+
+void MultiplayerState::HandleSkinSet(uint16_t sender_id, const uint8_t* data, size_t len) {
+	PacketReader reader(data, len);
+	reader.readType();
+
+	uint16_t peer_id = reader.readU16();
+	std::string charset_name = reader.readString();
+	int32_t char_index = reader.readI32();
+	int32_t data_size = reader.readI32();
+
+	if (data_size <= 0 || data_size > 1024 * 1024) {
+		Output::Debug("Skin: Invalid skin data size {} from peer {}", data_size, peer_id);
+		return;
+	}
+
+	const uint8_t* img_data = reader.readBytes(static_cast<size_t>(data_size));
+	if (!img_data) {
+		Output::Debug("Skin: Incomplete skin data from peer {}", peer_id);
+		return;
+	}
+
+	uint16_t actual_id = (sender_id != 0) ? sender_id : peer_id;
+
+	// Decode bitmap
+	BitmapRef bmp = Bitmap::Create(img_data, static_cast<unsigned>(data_size), true);
+	if (!bmp) {
+		Output::Debug("Skin: Failed to decode skin bitmap from peer {}", actual_id);
+		return;
+	}
+
+	// Register in cache with the expected name
+	std::string cache_name = "__skin_" + std::to_string(actual_id);
+	Cache::RegisterCharset(cache_name, bmp);
+	peer_skin_names[actual_id] = cache_name;
+	auto* rp = GetRemotePlayer(actual_id);
+	if (rp) {
+		rp->SetCharacterSprite(cache_name, char_index);
+	}
+
+	Output::Debug("Skin: Received skin '{}' index {} from peer {} ({} bytes)",
+		charset_name, char_index, actual_id, data_size);
+
+	// If we're the host, forward to all other clients
+	auto& net = NetManager::Instance();
+	if (net.IsHost()) {
+		PacketWriter fwd(PacketType::SkinSet);
+		fwd.write(actual_id);
+		fwd.write(charset_name);
+		fwd.write(static_cast<int32_t>(char_index));
+		fwd.write(static_cast<int32_t>(data_size));
+		fwd.writeBytes(img_data, static_cast<size_t>(data_size));
+		net.Broadcast(fwd, true);
 	}
 }
 

@@ -6,7 +6,11 @@
 #ifndef EP_CHAOS_GAME_MODE_H
 #define EP_CHAOS_GAME_MODE_H
 
+#include <string>
+
 namespace Chaos {
+
+struct ScriptedGamemodeDef;
 
 enum class GameMode {
 	Normal = 0,
@@ -32,6 +36,15 @@ inline const GameModeInfo& GetGameModeInfo(GameMode mode) {
 /** Global singleplayer game mode. Set before game starts. */
 GameMode GetCurrentGameMode();
 void SetCurrentGameMode(GameMode mode);
+void SetCurrentScriptedGamemode(const std::string& id);
+void ClearCurrentScriptedGamemode();
+bool HasCurrentScriptedGamemode();
+const std::string& GetCurrentScriptedGamemodeId();
+const ScriptedGamemodeDef* GetCurrentScriptedGamemode();
+void NotifyCurrentGamemodeStart();
+void NotifyCurrentGamemodeUpdate();
+void NotifyCurrentGamemodeBattleStart();
+void NotifyCurrentGamemodeBattleEnd();
 bool IsUndertaleMode();
 bool IsHorrorSingleplayerMode();
 

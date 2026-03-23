@@ -77,6 +77,7 @@ namespace {
 
 	using key_type = std::string;
 	std::unordered_map<key_type, CacheItem> cache;
+	std::unordered_map<std::string, BitmapRef> custom_charsets;
 
 	using tile_key_type = std::string;
 	std::unordered_map<tile_key_type, std::weak_ptr<Bitmap>> cache_tiles;
@@ -130,6 +131,11 @@ namespace {
 	}
 
 	BitmapRef AddToCache(const std::string& key, BitmapRef bmp) {
+		auto existing = cache.find(key);
+		if (existing != cache.end() && existing->second.bitmap) {
+			cache_size -= existing->second.bitmap->GetSize();
+		}
+
 		if (bmp) {
 			cache_size += bmp->GetSize();
 #ifdef CACHE_DEBUG
@@ -366,7 +372,29 @@ BitmapRef Cache::Battleweapon(std::string_view file) {
 }
 
 BitmapRef Cache::Charset(std::string_view file) {
+	auto custom_it = custom_charsets.find(std::string(file));
+	if (custom_it != custom_charsets.end()) {
+		return AddToCache(MakeHashKey("CharSet", file, true, 0), custom_it->second);
+	}
 	return LoadBitmap<Material::Charset>(file);
+}
+
+void Cache::RegisterCharset(const std::string& name, BitmapRef bitmap) {
+	const auto key = MakeHashKey("CharSet", name, true, 0);
+	custom_charsets[name] = bitmap;
+	AddToCache(key, bitmap);
+}
+
+void Cache::UnregisterCharset(const std::string& name) {
+	const auto key = MakeHashKey("CharSet", name, true, 0);
+	custom_charsets.erase(name);
+	auto it = cache.find(key);
+	if (it != cache.end()) {
+		if (it->second.bitmap) {
+			cache_size -= it->second.bitmap->GetSize();
+		}
+		cache.erase(it);
+	}
 }
 
 BitmapRef Cache::Chipset(std::string_view file) {
@@ -539,6 +567,9 @@ void Cache::Clear() {
 	cache_effects.clear();
 	cache.clear();
 	cache_size = 0;
+	for (const auto& [name, bitmap] : custom_charsets) {
+		AddToCache(MakeHashKey("CharSet", name, true, 0), bitmap);
+	}
 
 	for (auto& kv : cache_tiles) {
 		auto& key = kv.first;

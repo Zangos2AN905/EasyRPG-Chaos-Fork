@@ -94,6 +94,7 @@ void Scene_GameBrowser::CreateWindows() {
 
 	options.push_back("Games");
 	options.push_back("Settings");
+	options.push_back("Mods");
 	options.push_back("About");
 	options.push_back("Exit");
 
@@ -133,6 +134,8 @@ void Scene_GameBrowser::UpdateCommand() {
 			about_window->SetVisible(true);
 			break;
 		default:
+			gamelist_window->SetVisible(false);
+			about_window->SetVisible(false);
 			break;
 	}
 
@@ -155,6 +158,9 @@ void Scene_GameBrowser::UpdateCommand() {
 				break;
 			case Options:
 				Scene::Push(std::make_shared<Scene_Settings>());
+				break;
+			case Mods:
+				Scene::Push(std::make_shared<Chaos::Scene_ModMenu>());
 				break;
 			default:
 				Scene::Pop();

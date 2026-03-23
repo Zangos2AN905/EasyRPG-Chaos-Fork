@@ -75,3 +75,9 @@ void Spriteset_Battle::Update() {
 	background->SetTone(new_tone);
 	background->Update();
 }
+
+void Spriteset_Battle::SetBackgroundVisible(bool visible) {
+	if (background) {
+		background->SetVisible(visible);
+	}
+}

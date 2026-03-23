@@ -44,6 +44,7 @@
 #include "chaos/scene_ai_characters.h"
 #include "chaos/discord_integration.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/scene_skin_select.h"
 
 class MenuItem final : public ConfigParam<std::string_view> {
 public:
@@ -635,6 +636,24 @@ void Window_Settings::RefreshLicense() {
 }
 
 void Window_Settings::RefreshChaos() {
+	// Set Multiplayer Skin
+	{
+		auto& mp = Chaos::MultiplayerState::Instance();
+		Option opt;
+		opt.text = "Set Multiplayer Skin";
+		opt.help = "Choose a character sprite for multiplayer";
+		if (mp.HasSkin()) {
+			opt.value_text = "[" + mp.GetSkinCharsetName() + " #" + std::to_string(mp.GetSkinCharIndex()) + "]";
+		} else {
+			opt.value_text = "[None]";
+		}
+		opt.mode = eOptionNone;
+		opt.action = [this]() {
+			Scene::Push(std::make_shared<Chaos::Scene_SkinSelect>());
+		};
+		GetFrame().options.push_back(std::move(opt));
+	}
+
 	// Discord Rich Presence toggle
 	{
 		Option opt;

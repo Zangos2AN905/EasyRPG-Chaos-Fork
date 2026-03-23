@@ -4,6 +4,8 @@
 
 #include "chaos/scene_gamemode_select.h"
 #include "chaos/game_mode.h"
+#include "chaos/mod_api.h"
+#include "chaos/mod_loader.h"
 #include "input.h"
 #include "player.h"
 #include "game_system.h"
@@ -20,6 +22,7 @@ Scene_GameModeSelect::Scene_GameModeSelect() {
 }
 
 void Scene_GameModeSelect::Start() {
+	ModLoader::Instance().EnsureLoaded();
 	CreateWindows();
 	Game_Clock::ResetFrame(Game_Clock::now());
 }
@@ -27,10 +30,23 @@ void Scene_GameModeSelect::Start() {
 void Scene_GameModeSelect::CreateWindows() {
 	help_window = std::make_unique<Window_Help>(0, 0, Player::screen_width, 32);
 
+	mode_entries.clear();
 	std::vector<std::string> options;
 	for (int i = 0; i < static_cast<int>(GameMode::Count); i++) {
 		auto& info = GetGameModeInfo(static_cast<GameMode>(i));
+		mode_entries.push_back({info.name, info.description, false, static_cast<GameMode>(i), {}});
 		options.push_back(info.name);
+	}
+
+	for (const auto* gamemode : ModRegistry::Instance().GetAllGamemodes()) {
+		if (!gamemode) {
+			continue;
+		}
+
+		const auto name = gamemode->name.empty() ? gamemode->id : gamemode->name;
+		const auto description = gamemode->description.empty() ? "Scripted gamemode provided by a mod." : gamemode->description;
+		mode_entries.push_back({name, description, true, GameMode::Normal, gamemode->id});
+		options.push_back(name);
 	}
 
 	command_window = std::make_unique<Window_Command>(options, Player::screen_width / 2);
@@ -42,9 +58,8 @@ void Scene_GameModeSelect::CreateWindows() {
 
 void Scene_GameModeSelect::UpdateHelp() {
 	int idx = command_window->GetIndex();
-	if (idx >= 0 && idx < static_cast<int>(GameMode::Count)) {
-		auto& info = GetGameModeInfo(static_cast<GameMode>(idx));
-		help_window->SetText(info.description);
+	if (idx >= 0 && idx < static_cast<int>(mode_entries.size())) {
+		help_window->SetText(mode_entries[idx].description);
 	}
 }
 
@@ -62,11 +77,15 @@ void Scene_GameModeSelect::vUpdate() {
 
 	if (Input::IsTriggered(Input::DECISION)) {
 		int idx = command_window->GetIndex();
-		if (idx >= 0 && idx < static_cast<int>(GameMode::Count)) {
+		if (idx >= 0 && idx < static_cast<int>(mode_entries.size())) {
 			Main_Data::game_system->SePlay(Main_Data::game_system->GetSystemSE(Main_Data::game_system->SFX_Decision));
 
-			// Set the selected game mode
-			SetCurrentGameMode(static_cast<GameMode>(idx));
+			const auto& entry = mode_entries[idx];
+			if (entry.scripted) {
+				SetCurrentScriptedGamemode(entry.scripted_id);
+			} else {
+				SetCurrentGameMode(entry.builtin_mode);
+			}
 
 			// Proceed to logo/title scene
 			auto logos = Scene_Logo::LoadLogos();

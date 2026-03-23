@@ -915,6 +915,8 @@ Point Font::Render(Bitmap& dest, int x, int y, Color const& color, char32_t glyp
 	}
 
 	auto rect = Rect(x, y, gret.bitmap->width(), gret.bitmap->height());
+	rect.x += gret.offset.x;
+	rect.y -= gret.offset.y;
 	dest.MaskedBlit(rect, *gret.bitmap, 0, 0, color);
 
 	gret.advance.x += current_style.letter_spacing;

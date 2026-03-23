@@ -64,6 +64,9 @@ void Game_Player::SetSaveData(lcf::rpg::SavePartyLocation save)
 	// RPG_RT will always reset the hero graphic on loading a save, even if
 	// a move route changed the graphic.
 	ResetGraphic();
+
+	// Reset Undertale pixel position so it re-syncs from the loaded tile position
+	Chaos::UndertaleMode::Instance().Reset();
 }
 
 lcf::rpg::SavePartyLocation Game_Player::GetSaveData() const {
@@ -81,7 +84,7 @@ Drawable::Z_t Game_Player::GetScreenZ(int x_offset, int y_offset) const {
 
 int Game_Player::GetSpriteX() const {
 	auto& ut = Chaos::UndertaleMode::Instance();
-	if (ut.IsActive()) {
+	if (ut.IsActive() && IsStopping()) {
 		return ut.GetAbsoluteX();
 	}
 	return Game_Character::GetSpriteX();
@@ -89,7 +92,7 @@ int Game_Player::GetSpriteX() const {
 
 int Game_Player::GetSpriteY() const {
 	auto& ut = Chaos::UndertaleMode::Instance();
-	if (ut.IsActive()) {
+	if (ut.IsActive() && IsStopping()) {
 		return ut.GetAbsoluteY();
 	}
 	return Game_Character::GetSpriteY();
@@ -153,6 +156,9 @@ void Game_Player::MoveTo(int map_id, int x, int y) {
 	Game_Character::MoveTo(map_id, x, y);
 	SetTotalEncounterRate(0);
 	SetMenuCalling(false);
+
+	// Re-sync Undertale pixel position from the new tile position
+	Chaos::UndertaleMode::Instance().Reset();
 
 	auto* vehicle = GetVehicle();
 	if (vehicle) {
@@ -355,14 +361,12 @@ void Game_Player::UpdateNextMovementAction() {
 			}
 		}
 
-		// Check below/above hero layer events at player's tile (Player Touch + Event Touch)
+		// Pixel-based event hitbox check (Player Touch + Event Touch)
 		if (moved) {
-			CheckEventTriggerHere({ lcf::rpg::EventPage::Trigger_touched, lcf::rpg::EventPage::Trigger_collision }, false);
+			ut.CheckEventHitbox(*this);
 		}
 
-		// Check same-layer events at front tile whenever pressing a direction.
-		// Uses GetFacing() which is always cardinal (XwithDirection doesn't handle diagonals).
-		// This mirrors the normal engine: pressing toward a same-layer event triggers it immediately.
+		// Check same-layer events at front tile whenever pressing a direction
 		if (Input::dir4 != 0) {
 			int facing = GetFacing();
 			int front_x = Game_Map::XwithDirection(GetX(), facing);
@@ -573,6 +577,9 @@ void Game_Player::ResetGraphic() {
 				auto* actor = actors[player_index];
 				if (actor) {
 					SetSpriteGraphic(ToString(actor->GetSpriteName()), actor->GetSpriteIndex());
+					if (mp.HasSkin()) {
+						SetSpriteGraphic("__skin_local", mp.GetSkinCharIndex());
+					}
 					SetTransparency(actor->GetSpriteTransparency());
 					return;
 				}
@@ -593,6 +600,9 @@ void Game_Player::ResetGraphic() {
 	}
 
 	SetSpriteGraphic(ToString(actor->GetSpriteName()), actor->GetSpriteIndex());
+	if (mp.IsActive() && mp.HasSkin()) {
+		SetSpriteGraphic("__skin_local", mp.GetSkinCharIndex());
+	}
 	SetTransparency(actor->GetSpriteTransparency());
 }
 

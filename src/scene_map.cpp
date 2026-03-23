@@ -38,6 +38,8 @@
 #include "input.h"
 #include "game_dynrpg.h"
 #include "chaos/multiplayer_state.h"
+#include "chaos/game_mode.h"
+#include "chaos/mod_loader.h"
 #include "chaos/multiplayer_chat.h"
 #include "chaos/scene_god_mode.h"
 
@@ -71,6 +73,7 @@ Scene_Map::~Scene_Map() {
 }
 
 void Scene_Map::Start() {
+	Chaos::ModLoader::Instance().EnsureLoaded();
 	Scene_Debug::ResetPrevIndices();
 	spriteset.reset(new Spriteset_Map());
 	message_window.reset(new Window_Message(Player::message_box_offset_x, Player::screen_height - MESSAGE_BOX_HEIGHT, MESSAGE_BOX_WIDTH, MESSAGE_BOX_HEIGHT));
@@ -94,6 +97,7 @@ void Scene_Map::Start() {
 	Main_Data::game_screen->InitGraphics();
 	Main_Data::game_pictures->InitGraphics();
 	Game_Clock::ResetFrame(Game_Clock::now());
+	Chaos::NotifyCurrentGamemodeStart();
 
 	Start2(MapUpdateAsyncContext());
 }
@@ -173,7 +177,11 @@ void Scene_Map::TransitionIn(SceneType prev_scene) {
 	}
 
 	if (prev_scene == Scene::Battle) {
-		transition.InitShow(Main_Data::game_system->GetTransition(Main_Data::game_system->Transition_EndBattleShow), this);
+		if (Chaos::IsUndertaleMode()) {
+			transition.InitShow(Transition::TransitionFadeIn, this, 32);
+		} else {
+			transition.InitShow(Main_Data::game_system->GetTransition(Main_Data::game_system->Transition_EndBattleShow), this);
+		}
 		return;
 	}
 
@@ -196,6 +204,10 @@ void Scene_Map::TransitionOut(SceneType next_scene) {
 	}
 
 	if (next_scene == Scene::Battle) {
+		if (Chaos::IsUndertaleMode()) {
+			transition.InitErase(Transition::TransitionCutOut, this, 1);
+			return;
+		}
 		if (!transition.IsErasedNotActive()) {
 			auto tt = Main_Data::game_system->GetTransition(Main_Data::game_system->Transition_BeginBattleErase);
 			if (tt == Transition::TransitionNone) {
@@ -247,6 +259,8 @@ void Scene_Map::PreUpdateForegroundEvents(MapUpdateAsyncContext& actx) {
 }
 
 void Scene_Map::vUpdate() {
+	Chaos::NotifyCurrentGamemodeUpdate();
+
 	// Multiplayer chat: update overlay timers and handle input
 	if (Chaos::MultiplayerChat::Instance().Update()) {
 		// Chat input is active — block all game input this frame

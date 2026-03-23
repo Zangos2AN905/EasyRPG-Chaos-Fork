@@ -50,6 +50,14 @@ public:
 	void SetMoveSpeed(int pixels_per_frame);
 	int GetMoveSpeed() const { return move_speed_pixels; }
 
+	/**
+	 * Check if the player's pixel hitbox overlaps any event at the given tile.
+	 * Uses the player's sub-tile position for precise collision.
+	 * @param trigger_set Trigger types to match
+	 * @return true if an event was triggered
+	 */
+	bool CheckEventHitbox(Game_Player& player) const;
+
 private:
 	UndertaleMode() = default;
 
