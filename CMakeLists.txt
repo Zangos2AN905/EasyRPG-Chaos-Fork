@@ -1064,6 +1064,10 @@ endif()
 # Detect all required libraries
 # PNG pulls in zlib which has a broken config when not both static and shared library are installed
 player_find_package(NAME PNG TARGET PNG::PNG REQUIRED CONFIG_BROKEN)
+if(WIN32)
+	target_include_directories(${PROJECT_NAME} BEFORE PRIVATE "C:/vcpkg/installed/x64-windows-static/include")
+	target_compile_definitions(${PROJECT_NAME} PRIVATE ZLIB_WINAPI)
+endif()
 player_find_package(NAME fmt TARGET fmt::fmt VERSION 5.2 REQUIRED)
 
 # Do not use player_find_package. enable_language used by pixman on Android does not work properly inside functions

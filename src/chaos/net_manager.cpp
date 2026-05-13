@@ -18,6 +18,9 @@ static constexpr uint16_t DEFAULT_PORT = 6510;
 static constexpr int MAX_CHANNELS = 2;
 static constexpr int CHANNEL_RELIABLE = 0;
 static constexpr int CHANNEL_UNRELIABLE = 1;
+static constexpr uint16_t MAX_PEER_COUNT = 256;
+static constexpr uint16_t MAX_PARTY_COUNT = 256;
+static constexpr uint16_t MAX_SWITCH_VAR_COUNT = 65535;
 
 NetManager& NetManager::Instance() {
 	static NetManager instance;
@@ -425,15 +428,21 @@ void NetManager::HandleClientEvent(ENetEvent& event) {
 				host_info.peer = nullptr;
 				peers.push_back(host_info);
 
-				// Read existing peers
-				uint16_t count = reader.readU16();
-				for (uint16_t i = 0; i < count; ++i) {
-					PeerInfo pi;
-					pi.peer_id = reader.readU16();
-					pi.player_name = reader.readString();
-					pi.peer = nullptr;
-					peers.push_back(pi);
-				}
+			// Read existing peers
+			uint16_t count = reader.readU16();
+			if (count > MAX_PEER_COUNT) {
+				Output::Warning("Multiplayer: JoinAccept peer count {} exceeds limit", count);
+				Disconnect();
+				enet_packet_destroy(event.packet);
+				break;
+			}
+			for (uint16_t i = 0; i < count; ++i) {
+				PeerInfo pi;
+				pi.peer_id = reader.readU16();
+				pi.player_name = reader.readString();
+				pi.peer = nullptr;
+				peers.push_back(pi);
+			}
 
 				Output::Debug("Multiplayer: Joined as '{}' (id={})", local_player_name, local_peer_id);
 
@@ -640,7 +649,14 @@ void NetManager::Disconnect() {
 }
 
 uint16_t NetManager::AllocatePeerId() {
-	return next_peer_id++;
+	uint16_t id = next_peer_id++;
+	if (id == 0) {
+		id = next_peer_id++;
+	}
+	if (next_peer_id == 0) {
+		next_peer_id = 1;
+	}
+	return id;
 }
 
 PeerInfo* NetManager::FindPeer(uint16_t peer_id) {
@@ -795,7 +811,12 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 			host_info.peer = nullptr;
 			peers.push_back(host_info);
 
-			uint16_t count = reader.readU16();
+		uint16_t count = reader.readU16();
+			if (count > MAX_PEER_COUNT) {
+				Output::Warning("Multiplayer: Relay JoinAccept peer count {} exceeds limit", count);
+				Disconnect();
+				return;
+			}
 			for (uint16_t i = 0; i < count; ++i) {
 				PeerInfo pi;
 				pi.peer_id = reader.readU16();
@@ -803,7 +824,6 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 				pi.peer = nullptr;
 				peers.push_back(pi);
 			}
-
 			Output::Debug("Multiplayer: Relay joined as '{}' (id={})", local_player_name, local_peer_id);
 			if (connect_callback) {
 				connect_callback(local_peer_id);
@@ -838,28 +858,40 @@ void NetManager::HandleRelayForward(uint16_t source_id, const uint8_t* data, siz
 			host_map_x = reader.readI32();
 			host_map_y = reader.readI32();
 			uint16_t num_party = reader.readU16();
-			host_party.clear();
-			for (uint16_t i = 0; i < num_party; ++i) {
-				HostPartyMember m;
-				m.actor_id = reader.readU16();
-				m.level = reader.readI32();
-				m.hp = reader.readI32();
-				m.sp = reader.readI32();
-				host_party.push_back(m);
+			if (num_party > MAX_PARTY_COUNT) {
+				Output::Warning("Multiplayer: Relay HostMapReady party count {} exceeds limit", num_party);
+				return;
 			}
-			host_map_ready = true;
-			Output::Debug("Multiplayer: Relay host entered map {} at ({}, {})",
-				host_map_id, host_map_x, host_map_y);
-		} else if (ptype == PacketType::SwitchBulkSync) {
-			uint16_t count = reader.readU16();
+		host_party.clear();
+		for (uint16_t i = 0; i < num_party; ++i) {
+			HostPartyMember m;
+			m.actor_id = reader.readU16();
+			m.level = reader.readI32();
+			m.hp = reader.readI32();
+			m.sp = reader.readI32();
+			host_party.push_back(m);
+		}
+		host_map_ready = true;
+		Output::Debug("Multiplayer: Relay host entered map {} at ({}, {})",
+			host_map_id, host_map_x, host_map_y);
+	} else if (ptype == PacketType::SwitchBulkSync) {
+		uint16_t count = reader.readU16();
+		if (count > MAX_SWITCH_VAR_COUNT) {
+			Output::Warning("Multiplayer: Relay SwitchBulkSync count {} exceeds limit", count);
+			return;
+		}
 			host_switches.clear();
 			host_switches.resize(count, false);
 			for (uint16_t i = 0; i < count; ++i) {
 				host_switches[i] = reader.readU8() != 0;
 			}
-		} else if (ptype == PacketType::VariableBulkSync) {
-			uint16_t count = reader.readU16();
-			host_variables.clear();
+	} else if (ptype == PacketType::VariableBulkSync) {
+		uint16_t count = reader.readU16();
+		if (count > MAX_SWITCH_VAR_COUNT) {
+			Output::Warning("Multiplayer: Relay VariableBulkSync count {} exceeds limit", count);
+			return;
+		}
+		host_variables.clear();
 			host_variables.resize(count, 0);
 			for (uint16_t i = 0; i < count; ++i) {
 				host_variables[i] = reader.readI32();

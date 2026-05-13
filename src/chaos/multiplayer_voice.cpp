@@ -231,6 +231,7 @@ static void AmplifyPcm(int16_t* samples, int count) {
 
 void MultiplayerVoice::OnVoiceDataReceived(uint16_t /*peer_id*/, const uint8_t* data, size_t len) {
 #ifdef HAS_SDL_AUDIO
+	if (len == 0 || len > 4096) return;
 	// Auto-initialize if we haven't yet
 	if (!initialized) {
 		Initialize();

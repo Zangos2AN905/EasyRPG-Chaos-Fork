@@ -27,19 +27,9 @@
 			"displayName": "user overrides for Windows",
 			"hidden": true,
 			"cacheVariables": {
-				"#toolchainFile": "$env{EASYRPG_BUILDSCRIPTS}/windows/vcpkg/scripts/buildsystems/vcpkg.cmake",
-				"##toolchainFile": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake"
 			},
 			"inherits": ["win-base"],
-			"vendor": {
-				"README": {
-					"line1": "Here you can provide a custom vcpkg root.",
-					"line2": "Two examples are given (in 'cacheVariables'):",
-					"line3": "The first is for a vcpkg from our buildscripts (that is the default).",
-					"line4": "The second is for a vcpkg inside of the Player repository.",
-					"line5": "To use one of them remove the # and set the path."
-				}
-			}
+			"toolchainFile": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
 		},
 		{
 			"name": "android-user",

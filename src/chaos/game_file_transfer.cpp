@@ -248,17 +248,34 @@ void GameFileTransferClient::WriterThread() {
 		if (has_chunk) {
 			// Sanitize the relative path to prevent directory traversal
 			std::string safe_path = chunk.relative_path;
-			// Remove any leading slashes or ".." components
+			// Remove any leading slashes
 			while (!safe_path.empty() && (safe_path[0] == '/' || safe_path[0] == '\\')) {
 				safe_path.erase(0, 1);
 			}
-			// Reject paths with ".." 
-			if (safe_path.find("..") != std::string::npos) {
+			// Reject paths containing Windows drive letters or NTFS streams
+			if (safe_path.find(':') != std::string::npos) {
+				Output::Warning("GameFileTransfer: Rejected path containing colon: {}", chunk.relative_path);
+				continue;
+			}
+			// Reject paths with ".." as a full path component
+			if (safe_path == ".." ||
+				safe_path.find("../") == 0 || safe_path.find("..\\") == 0 ||
+				safe_path.find("/../") != std::string::npos || safe_path.find("\\..\\") != std::string::npos ||
+				safe_path.find("/..") == safe_path.size() - 3 || safe_path.find("\\..") == safe_path.size() - 3) {
 				Output::Warning("GameFileTransfer: Rejected unsafe path: {}", chunk.relative_path);
 				continue;
 			}
 
 			std::string full_path = dest_path + "/" + safe_path;
+
+			// Double-check: resolve and verify containment within dest_path
+			fs::path normalized = fs::path(full_path).lexically_normal();
+			fs::path dest = fs::path(dest_path).lexically_normal();
+			auto [dest_end, _] = std::mismatch(dest.begin(), dest.end(), normalized.begin(), normalized.end());
+			if (dest_end != dest.end()) {
+				Output::Warning("GameFileTransfer: Path escapes destination: {}", chunk.relative_path);
+				continue;
+			}
 
 			// Create parent directories
 			auto parent = fs::path(full_path).parent_path();

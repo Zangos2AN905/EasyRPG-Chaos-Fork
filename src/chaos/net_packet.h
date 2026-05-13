@@ -131,13 +131,15 @@ public:
 
 	PacketType readType() { return static_cast<PacketType>(readU8()); }
 
+	bool ok() const { return !error; }
+
 	uint8_t readU8() {
-		if (pos >= length) return 0;
+		if (pos >= length) { error = true; return 0; }
 		return buf[pos++];
 	}
 
 	uint16_t readU16() {
-		if (pos + 2 > length) return 0;
+		if (pos + 2 > length) { error = true; return 0; }
 		uint16_t v = static_cast<uint16_t>(buf[pos]) |
 		             (static_cast<uint16_t>(buf[pos + 1]) << 8);
 		pos += 2;
@@ -145,7 +147,7 @@ public:
 	}
 
 	int32_t readI32() {
-		if (pos + 4 > length) return 0;
+		if (pos + 4 > length) { error = true; return 0; }
 		uint32_t u = static_cast<uint32_t>(buf[pos]) |
 		             (static_cast<uint32_t>(buf[pos + 1]) << 8) |
 		             (static_cast<uint32_t>(buf[pos + 2]) << 16) |
@@ -158,14 +160,14 @@ public:
 
 	std::string readString() {
 		uint16_t len = readU16();
-		if (pos + len > length) return "";
+		if (pos + len > length) { error = true; return ""; }
 		std::string s(reinterpret_cast<const char*>(buf + pos), len);
 		pos += len;
 		return s;
 	}
 
 	const uint8_t* readBytes(size_t len) {
-		if (pos + len > length) return nullptr;
+		if (pos + len > length) { error = true; return nullptr; }
 		const uint8_t* ptr = buf + pos;
 		pos += len;
 		return ptr;
@@ -177,6 +179,7 @@ private:
 	const uint8_t* buf;
 	size_t length;
 	size_t pos;
+	bool error = false;
 };
 
 } // namespace Chaos

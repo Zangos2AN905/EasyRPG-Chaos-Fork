@@ -5,6 +5,8 @@
 
 #include "chaos/relay_connection.h"
 #include "output.h"
+#include <chrono>
+#include <thread>
 
 #ifdef _WIN32
 #pragma comment(lib, "ws2_32.lib")
@@ -137,10 +139,12 @@ void RelayConnection::Send(RelayMsgType type, const uint8_t* data, size_t len) {
 #ifdef _WIN32
 			int err = WSAGetLastError();
 			if (err == WSAEWOULDBLOCK) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				continue;
 			}
 #else
 			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 				continue;
 			}
 #endif
@@ -210,10 +214,15 @@ bool RelayConnection::SetNonBlocking(SocketHandle s) {
 }
 
 bool RelayConnection::ReadAvailableData() {
+	static constexpr size_t MAX_RECV_BUF = 4 * 1024 * 1024; // 4 MB
 	char temp[4096];
 	while (true) {
 		int received = recv(sock, temp, sizeof(temp), 0);
 		if (received > 0) {
+			if (recv_buf.size() + received > MAX_RECV_BUF) {
+				Output::Warning("Relay: Receive buffer exceeded {} bytes", MAX_RECV_BUF);
+				return false;
+			}
 			recv_buf.insert(recv_buf.end(), temp, temp + received);
 		} else if (received == 0) {
 			// Connection closed

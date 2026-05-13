@@ -19,6 +19,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <istream>
+#ifdef _WIN32
+#include "C:/vcpkg/installed/x64-windows-static/include/zconf.h"
+#endif
 #include <zlib.h>
 #include <vector>
 #include "output.h"
