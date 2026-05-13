@@ -60,6 +60,15 @@ public:
 		Teleport,
 		Settings,
 		LanguageMenu,
+		MultiplayerLobby,
+		MultiplayerMenu,
+		MultiplayerWait,
+		ModMenu,
+		SkinSelect,
+		GameModeSelect,
+		AICharacters,
+		Editor,
+		RpgStore,
 		SceneMax
 	};
 

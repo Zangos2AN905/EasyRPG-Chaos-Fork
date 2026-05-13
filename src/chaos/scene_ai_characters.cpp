@@ -25,7 +25,7 @@
 #include "../options.h"
 
 Scene_AICharacters::Scene_AICharacters() {
-	Scene::type = Scene::Settings; // reuse Settings scene type for RPG_RT mapping
+	Scene::type = Scene::AICharacters;
 }
 
 void Scene_AICharacters::Start() {

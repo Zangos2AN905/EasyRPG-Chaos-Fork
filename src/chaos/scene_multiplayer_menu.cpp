@@ -16,7 +16,7 @@
 namespace Chaos {
 
 Scene_MultiplayerMenu::Scene_MultiplayerMenu() {
-	type = Scene::Settings;
+	type = Scene::MultiplayerMenu;
 }
 
 void Scene_MultiplayerMenu::Start() {

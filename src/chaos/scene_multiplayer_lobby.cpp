@@ -103,7 +103,7 @@ static void CycleLobbySettingValue(int index) {
 }
 
 Scene_MultiplayerLobby::Scene_MultiplayerLobby() {
-	type = Scene::Settings;
+	type = Scene::MultiplayerLobby;
 }
 
 void Scene_MultiplayerLobby::Start() {

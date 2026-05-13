@@ -119,7 +119,16 @@ void Scene_Title::TransitionIn(SceneType prev_scene) {
 }
 
 void Scene_Title::Suspend(Scene::SceneType scene_type) {
-	if (scene_type == Scene::Settings || scene_type == Scene::LanguageMenu) {
+	if (scene_type == Scene::Settings || scene_type == Scene::LanguageMenu
+		|| scene_type == Scene::MultiplayerLobby
+		|| scene_type == Scene::MultiplayerMenu
+		|| scene_type == Scene::MultiplayerWait
+		|| scene_type == Scene::ModMenu
+		|| scene_type == Scene::SkinSelect
+		|| scene_type == Scene::GameModeSelect
+		|| scene_type == Scene::AICharacters
+		|| scene_type == Scene::Editor
+		|| scene_type == Scene::RpgStore) {
 		restart_title_cache = true;
 	}
 

@@ -113,24 +113,33 @@ void OnJoinRequest(const DiscordUser* request) {
 
 const char* SceneTypeToString(Scene::SceneType type) {
 	switch (type) {
-		case Scene::Title:       return "Title Screen";
-		case Scene::Map:         return "Exploring";
-		case Scene::Battle:      return "In Battle";
-		case Scene::Menu:        return "In Menu";
-		case Scene::Item:        return "Browsing Items";
-		case Scene::Skill:       return "Viewing Skills";
-		case Scene::Equip:       return "Equipping";
-		case Scene::Status:      return "Viewing Status";
-		case Scene::Save:        return "Saving";
-		case Scene::Load:        return "Loading";
-		case Scene::Shop:        return "Shopping";
-		case Scene::Name:        return "Naming Character";
-		case Scene::Gameover:    return "Game Over";
-		case Scene::End:         return "Ending";
-		case Scene::Logo:        return "Starting Up";
-		case Scene::GameBrowser: return "Browsing Games";
-		case Scene::Settings:    return "In Settings";
-		default:                 return "Playing";
+		case Scene::Title:            return "Title Screen";
+		case Scene::Map:              return "Exploring";
+		case Scene::Battle:           return "In Battle";
+		case Scene::Menu:             return "In Menu";
+		case Scene::Item:             return "Browsing Items";
+		case Scene::Skill:            return "Viewing Skills";
+		case Scene::Equip:            return "Equipping";
+		case Scene::Status:           return "Viewing Status";
+		case Scene::Save:             return "Saving";
+		case Scene::Load:             return "Loading";
+		case Scene::Shop:             return "Shopping";
+		case Scene::Name:             return "Naming Character";
+		case Scene::Gameover:         return "Game Over";
+		case Scene::End:              return "Ending";
+		case Scene::Logo:             return "Starting Up";
+		case Scene::GameBrowser:      return "Browsing Games";
+		case Scene::Settings:         return "In Settings";
+		case Scene::MultiplayerLobby: return "Multiplayer Lobby";
+		case Scene::MultiplayerMenu:  return "Multiplayer Menu";
+		case Scene::MultiplayerWait:  return "Waiting for Players";
+		case Scene::ModMenu:          return "Mod Menu";
+		case Scene::SkinSelect:       return "Selecting Skin";
+		case Scene::GameModeSelect:   return "Selecting Game Mode";
+		case Scene::AICharacters:     return "AI Characters";
+		case Scene::Editor:           return "Using Editor";
+		case Scene::RpgStore:         return "RPG Store";
+		default:                      return "Playing";
 	}
 }
 

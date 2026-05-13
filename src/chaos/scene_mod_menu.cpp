@@ -157,7 +157,7 @@ const Window_ModList::ModEntry* Window_ModList::GetEntry(int index) const {
 // ============================================================
 
 Scene_ModMenu::Scene_ModMenu() {
-	type = Scene::Settings;
+	type = Scene::ModMenu;
 }
 
 void Scene_ModMenu::Start() {

@@ -28,7 +28,7 @@
 namespace Chaos {
 
 Scene_MultiplayerWait::Scene_MultiplayerWait() {
-	type = Scene::Settings;
+	type = Scene::MultiplayerWait;
 }
 
 void Scene_MultiplayerWait::Start() {

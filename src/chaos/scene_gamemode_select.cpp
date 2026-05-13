@@ -18,7 +18,7 @@
 namespace Chaos {
 
 Scene_GameModeSelect::Scene_GameModeSelect() {
-	type = Scene::Settings;
+	type = Scene::GameModeSelect;
 }
 
 void Scene_GameModeSelect::Start() {

@@ -41,7 +41,7 @@ static constexpr int EDITOR_WIDTH = 848;
 static constexpr int EDITOR_HEIGHT = 480;
 
 Scene_Editor::Scene_Editor() {
-	type = Scene::Settings;
+	type = Scene::Editor;
 }
 
 Scene_Editor::~Scene_Editor() {

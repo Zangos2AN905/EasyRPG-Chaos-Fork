@@ -22,7 +22,7 @@
 #include <filesystem>
 
 Scene_RpgStore::Scene_RpgStore() {
-	type = Scene::Settings; // Reuse an existing SceneType
+	type = Scene::RpgStore;
 
 	// Populate the game catalog
 	games.push_back({

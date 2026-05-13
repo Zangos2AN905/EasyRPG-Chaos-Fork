@@ -69,7 +69,16 @@ const char Scene::scene_names[SceneMax][12] =
 	"GameBrowser",
 	"Teleport",
 	"Settings",
-	"Language"
+	"Language",
+	"MPLobby",
+	"MPMenu",
+	"MPWait",
+	"ModMenu",
+	"SkinSelect",
+	"GMSelect",
+	"AIChar",
+	"Editor",
+	"RpgStore"
 };
 
 enum PushPopOperation {

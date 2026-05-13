@@ -101,7 +101,7 @@ static void AddCharsetsFromGamePath(const std::string& game_path, const std::str
 }
 
 Scene_SkinSelect::Scene_SkinSelect() {
-	type = Scene::Settings;
+	type = Scene::SkinSelect;
 }
 
 void Scene_SkinSelect::Start() {
